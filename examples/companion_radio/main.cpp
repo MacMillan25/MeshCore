@@ -248,6 +248,7 @@ void loop() {
   the_mesh.loop();
   interface_manager.loop();
   sensors.loop();
+  board.loop();
 #if defined(DISPLAY_CLASS) && defined(WITH_ASYNC_EINK)
   if (!the_mesh.isRadioTxBusy()) display.service();
 #endif

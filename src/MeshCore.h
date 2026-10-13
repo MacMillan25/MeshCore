@@ -57,6 +57,23 @@ public:
   // Boards may override to stop a boot-indicator LED sequence or similar.
   // Default no-op: boards that don't care need not implement anything.
   virtual void onBootComplete() { /* no op */ }
+  // Called once per superloop iteration from the example's loop(). Boards that
+  // need periodic housekeeping — charge accounting, slow sensors — override it
+  // rather than being polled only when something happens to ask.
+  virtual void loop() { /* no op */ }
+  // Lets the UI tell the board whether the panel is lit. Boards that model their
+  // own power draw pick a different idle current for each case.
+  virtual void setDisplayOn(bool on) { /* no op */ }
+  // Nameplate pack capacity, pushed in by the UI when the user changes it.
+  // Boards that model their own runtime use it as the reference for "full".
+  virtual void setBatteryCapacityMah(float mah) { /* no op */ }
+  // State of charge carried across reboots. The board owns the live value; the
+  // UI seeds it at boot from prefs and writes it back with the periodic flush.
+  virtual uint32_t getRemainMah() const { return 0; }
+  virtual void setRemainMah(uint32_t mah) { /* no op */ }
+  // Draw of the fitted radio module while transmitting, pushed in by the UI when
+  // the user picks a module. Boards that model their runtime use it directly.
+  virtual void setTxCurrentMa(float ma) { /* no op */ }
   virtual uint32_t getIRQGpio() { return -1; } // not supported. Returns DIO1 (SX1262) and DIO0 (SX127x)
   virtual void sleep(uint32_t secs)  { /* no op */ }
   virtual uint32_t getGpio() { return 0; }

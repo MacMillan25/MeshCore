@@ -103,6 +103,11 @@ public:
   uint8_t  ui_mcmp_detect_off = 0;   // 0 = show/forward MCMP placeholders
   uint8_t  ui_aeic_detect_off = 0;   // 0 = show/forward AEIC placeholders
   uint8_t  ui_mcoimg_detect_off = 0; // 0 = show/forward MCOimg placeholders
+  uint8_t  ui_noise_speed_idx = 2;   // noise page trace step: 0=100, 1=250, 2=500, 3=1000 ms
+  uint8_t  ui_batt_capacity_idx = 0; // pack nameplate for the battery page: 0=3000, 1=4000 mAh
+  uint32_t ui_remain_mah = 0;        // discharge estimate carried across reboots
+  uint8_t  ui_remain_valid = 0;      // 1 once ui_remain_mah holds a real reading
+  uint8_t  ui_radio_module_idx = 0;  // TX draw of the fitted module: 0=33S, 1=30S, 2=RA62
 
 private:
   class RadioPrefs : public ConfigSerializer {
@@ -238,6 +243,11 @@ private:
       def("mcmp_det_off", _parent->ui_mcmp_detect_off);
       def("aeic_det_off", _parent->ui_aeic_detect_off);
       def("mcoimg_det_off", _parent->ui_mcoimg_detect_off);
+      def("nf_speed", _parent->ui_noise_speed_idx);
+      def("batt_cap", _parent->ui_batt_capacity_idx);
+      def("remain_mah", _parent->ui_remain_mah);
+      def("remain_ok", _parent->ui_remain_valid);
+      def("radio_mod", _parent->ui_radio_module_idx);
     }
   public:
     UIPrefs(NodePrefs* parent) : _parent(parent) { }

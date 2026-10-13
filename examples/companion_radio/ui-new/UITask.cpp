@@ -24,6 +24,99 @@
   #define UI_RECENT_LIST_SIZE 4
 #endif
 
+// Home-screen page visibility. A page leaves the button rotation when its
+// UI_NO_<PAGE> flag is present, written either bare (-D UI_NO_RECENT) or with a
+// value (-D UI_NO_RECENT=1). Normalising to a 0/1 macro here keeps every use
+// site a plain #if and leaves the existing ENV_INCLUDE_GPS check in charge of
+// whether a GPS page is possible at all.
+#ifdef UI_NO_RECENT
+  #define UI_PAGE_RECENT     0
+#else
+  #define UI_PAGE_RECENT     1
+#endif
+#ifdef UI_NO_BLUETOOTH
+  #define UI_PAGE_BLUETOOTH  0
+#else
+  #define UI_PAGE_BLUETOOTH  1
+#endif
+#ifdef UI_NO_ADVERT
+  #define UI_PAGE_ADVERT     0
+#else
+  #define UI_PAGE_ADVERT     1
+#endif
+#if ENV_INCLUDE_GPS == 1 && !defined(UI_NO_GPS)
+  #define UI_PAGE_GPS        1
+#else
+  #define UI_PAGE_GPS        0
+#endif
+
+// The battery test page needs the DarkTec discharge model, so it only compiles
+// where that board is: on anything else the flag is ignored rather than turned
+// into a build error. Defined here, above the Settings row arithmetic, because
+// the page contributes a row of its own.
+#if UI_BATT_PAGE == 1 && defined(DARKTEC)
+  #define UI_PAGE_BATT 1
+#else
+  #define UI_PAGE_BATT 0
+#endif
+
+#if UI_NOISE_PAGE == 1
+  // Rolling noise-floor trace. 64 bars of 2px fill a 128px row exactly; one
+  // sample per NOISE_SAMPLE_MILLIS, kept in step with the build's
+  // NOISE_FLOOR_CALIB_INTERVAL so no bar repeats a value the core has not
+  // refreshed yet.
+  #define NOISE_SAMPLES        64
+  #define NOISE_SAMPLE_MILLIS  500
+  // Trace steps offered by the Settings row, in milliseconds.
+  static const int NOISE_SPEED_MS[4] = { 100, 250, 500, 1000 };
+#endif
+
+// Fork pages contribute extra rows to the Settings list. Boards without them
+// keep their original numbering, so every index from ROT onwards is shifted by
+// the running total rather than duplicated per configuration.
+#if UI_NOISE_PAGE == 1
+  #define SETTINGS_NOISE_ROWS  1
+#else
+  #define SETTINGS_NOISE_ROWS  0
+#endif
+#if UI_PAGE_BATT
+  #define SETTINGS_BATT_ROWS   1
+  #define SETTINGS_RADIO_ROWS  1   // module picker feeds the same discharge model
+  // Nameplate pack capacities offered by the Settings row, in mAh.
+  static const uint32_t BATT_CAPACITY_MAH[2] = { 3000, 4000 };
+  // Draw while transmitting for the selectable modules, in mA. Measured on this
+  // board: the 30S pulls about half of what the 33S does, the RA62 far less.
+  static const float RADIO_TX_MA[3] = { 1560.0f, 780.0f, 115.0f };
+  static const char* const RADIO_MODULE_LABEL[3] = { "33S", "30S", "RA62" };
+#else
+  #define SETTINGS_BATT_ROWS   0
+  #define SETTINGS_RADIO_ROWS  0
+#endif
+#define SETTINGS_EXTRA_ROWS  (SETTINGS_NOISE_ROWS + SETTINGS_BATT_ROWS + SETTINGS_RADIO_ROWS)
+
+// LPP channel numbers of the two INA3221 rails this fork displays. Channel 1 is
+// the node's own battery (added by refresh_sensors), so the three INA hardware
+// channels land on 2..4, in the order they are enabled. BATT is the last one,
+// CHRG the one before it; the first is not shown. Defined unconditionally: the
+// battery test page reads the pack rail even when the INA page is not built.
+#ifndef INA_CHANNEL_BATT
+  #define INA_CHANNEL_BATT  4
+#endif
+#ifndef INA_CHANNEL_CHRG
+  #define INA_CHANNEL_CHRG  3
+#endif
+
+// How often the shared CayenneLPP snapshot is re-read. The SENSORS page shows
+// slow environmental values and keeps its original cadence; the INA page is
+// watched live — battery and charger current move within a second — so it asks
+// for a fresh snapshot far more often.
+#if AUTO_OFF_MILLIS > 0
+  #define UI_SENSORS_REFRESH_MS  5000
+#else
+  #define UI_SENSORS_REFRESH_MS  60000
+#endif
+#define UI_INA_REFRESH_MS        1000
+
 #if UI_HAS_JOYSTICK
   #define PRESS_LABEL "press Enter"
 #else
@@ -49,10 +142,17 @@ static void formatDuration(char* buf, size_t len, uint32_t secs) {
     snprintf(buf, len, "%uy %ud %uh %um", y, d - y * 365, h % 24, m % 60);
 }
 
+// Optional marker appended to the version on the boot screen — a board
+// revision, a build counter, whatever identifies this particular binary.
+// Empty by default; set it with -D FIRMWARE_VERSION_SUFFIX=\"5b\".
+#ifndef FIRMWARE_VERSION_SUFFIX
+  #define FIRMWARE_VERSION_SUFFIX ""
+#endif
+
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
-  char _version_info[12];   // e.g. "v1.14.1"
+  char _version_info[12];   // e.g. "v1.14.1", plus any FIRMWARE_VERSION_SUFFIX
   char _commit_info[12];    // e.g. "#abc1234" or "" if no GIT_COMMIT
 
 public:
@@ -65,6 +165,22 @@ public:
     if (len >= (int)sizeof(_version_info)) len = sizeof(_version_info) - 1;
     memcpy(_version_info, ver, len);
     _version_info[len] = 0;
+
+    // Append the marker, separated by a space. The separator is added here
+    // rather than carried in the flag: a space inside a -D value splits the
+    // compiler command line, so FIRMWARE_VERSION_SUFFIX stays a bare word.
+    const char* suffix = FIRMWARE_VERSION_SUFFIX;
+    int suflen = (int)strlen(suffix);
+    if (suflen > 0 && len < (int)sizeof(_version_info) - 1) {
+      _version_info[len++] = ' ';
+    }
+    if (len + suflen > (int)sizeof(_version_info) - 1)
+      suflen = (int)sizeof(_version_info) - 1 - len;
+    if (suflen < 0) suflen = 0;
+    if (suflen > 0) {
+      memcpy(_version_info + len, suffix, suflen);
+    }
+    _version_info[len + suflen] = 0;
 
     // commit part: "#abc1234" (from the part after '-')
     if (dash) {
@@ -120,13 +236,26 @@ class HomeScreen : public UIScreen {
   enum HomePage {
     FIRST,
     CLOCK,     // eInk only: large clock + PM preview inline
+#if UI_PAGE_RECENT
     RECENT,
+#endif
     RADIO,
-#ifndef WITH_WIFI_SWITCHING
+#if UI_NOISE_PAGE == 1
+    NOISE,     // live noise-floor bar graph
+#endif
+#if UI_INA_PAGE == 1
+    INA,       // INA3221: battery rail + charger rail (V / A / W) + charge total
+#endif
+#if UI_PAGE_BATT
+    BATT,      // battery test: pack voltage, remaining capacity, ETA
+#endif
+#if UI_PAGE_BLUETOOTH && !defined(WITH_WIFI_SWITCHING)
     BLUETOOTH,
 #endif
+#if UI_PAGE_ADVERT
     ADVERT,
-#if ENV_INCLUDE_GPS == 1
+#endif
+#if UI_PAGE_GPS
     GPS,
 #endif
 #if UI_SENSORS_PAGE == 1
@@ -147,7 +276,33 @@ class HomeScreen : public UIScreen {
   uint8_t _page;
   bool _shutdown_init;
   int _clock_pm_pending;   // PMs queued for inline display on CLOCK page
+#if UI_PAGE_RECENT
   AdvertPath recent[UI_RECENT_LIST_SIZE];
+#endif
+#if UI_NOISE_PAGE == 1
+  int16_t       noise_hist[NOISE_SAMPLES] = {};
+  uint8_t       noise_head = 0;          // next write slot
+  uint8_t       noise_count = 0;         // valid entries, grows to NOISE_SAMPLES
+  unsigned long next_noise_sample = 0;
+
+  // Oldest sample first: index 0 is the leftmost column on screen.
+  int noiseSampleAt(int i) const {
+    return noise_hist[(noise_head + NOISE_SAMPLES - noise_count + i) % NOISE_SAMPLES];
+  }
+
+  // Three-point moving average. The core already averages 64 RSSI reads, but it
+  // only hands over a fresh result every calibration interval, so neighbouring
+  // columns can still step by a couple of dB.
+  int noiseSmoothedAt(int i) const {
+    int sum = 0, n = 0;
+    for (int k = i - 1; k <= i + 1; k++) {
+      if (k < 0 || k >= noise_count) continue;
+      sum += noiseSampleAt(k);
+      n++;
+    }
+    return n ? (sum + n / 2) / n : 0;
+  }
+#endif
 #if !(defined(UI_NO_DISCOVER_SCREEN) && (UI_NO_DISCOVER_SCREEN + 0 != 0))
   DiscoveredNode discovered[UI_RECENT_LIST_SIZE];
   uint32_t discovery_req_time = 0;
@@ -164,7 +319,7 @@ class HomeScreen : public UIScreen {
   int           _pm_clock_mode  = 1;   // 0=all msgs switch screen, 1=PM inline only
 
 #if defined(WITH_COMPANION_CLI) && defined(WITH_WIFI_SWITCHING)
-  static const int SETTINGS_N               = 16;
+  static const int SETTINGS_N               = 16 + SETTINGS_EXTRA_ROWS;
   static const int SETTINGS_COMMS_IDX       = 3;
   static const int SETTINGS_PM_IDX          = 4;
   static const int SETTINGS_DIM_IDX         = 5;
@@ -174,12 +329,19 @@ class HomeScreen : public UIScreen {
   static const int SETTINGS_MCMP_IDX        = 9;
   static const int SETTINGS_AEIC_IDX        = 10;
   static const int SETTINGS_MCOIMG_IDX      = 11;
-  static const int SETTINGS_ROT_IDX         = 12;
-  static const int SETTINGS_UNREAD_IDX      = 13;
-  static const int SETTINGS_LOG_IDX         = 14;
-  static const int SETTINGS_BACK_IDX        = 15;
+#if UI_NOISE_PAGE == 1
+  static const int SETTINGS_NOISE_IDX       = 12;
+#endif
+#if UI_PAGE_BATT
+  static const int SETTINGS_BATT_CAP_IDX    = 12 + SETTINGS_NOISE_ROWS;
+  static const int SETTINGS_RADIO_IDX       = 13 + SETTINGS_NOISE_ROWS;
+#endif
+  static const int SETTINGS_ROT_IDX         = 12 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_UNREAD_IDX      = 13 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_LOG_IDX         = 14 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_BACK_IDX        = 15 + SETTINGS_EXTRA_ROWS;
 #elif defined(WITH_COMPANION_CLI)
-  static const int SETTINGS_N               = 15;
+  static const int SETTINGS_N               = 15 + SETTINGS_EXTRA_ROWS;
   static const int SETTINGS_PM_IDX          = 3;
   static const int SETTINGS_DIM_IDX         = 4;
   static const int SETTINGS_C2L_CH_IDX      = 5;
@@ -188,22 +350,36 @@ class HomeScreen : public UIScreen {
   static const int SETTINGS_MCMP_IDX        = 8;
   static const int SETTINGS_AEIC_IDX        = 9;
   static const int SETTINGS_MCOIMG_IDX      = 10;
-  static const int SETTINGS_ROT_IDX         = 11;
-  static const int SETTINGS_UNREAD_IDX      = 12;
-  static const int SETTINGS_LOG_IDX         = 13;
-  static const int SETTINGS_BACK_IDX        = 14;
+#if UI_NOISE_PAGE == 1
+  static const int SETTINGS_NOISE_IDX       = 11;
+#endif
+#if UI_PAGE_BATT
+  static const int SETTINGS_BATT_CAP_IDX    = 11 + SETTINGS_NOISE_ROWS;
+  static const int SETTINGS_RADIO_IDX       = 12 + SETTINGS_NOISE_ROWS;
+#endif
+  static const int SETTINGS_ROT_IDX         = 11 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_UNREAD_IDX      = 12 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_LOG_IDX         = 13 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_BACK_IDX        = 14 + SETTINGS_EXTRA_ROWS;
 #else
-  static const int SETTINGS_N               = 10;
+  static const int SETTINGS_N               = 10 + SETTINGS_EXTRA_ROWS;
   static const int SETTINGS_PM_IDX          = 0;
   static const int SETTINGS_DIM_IDX         = 1;
   static const int SETTINGS_MCOTXT_IDX      = 2;
   static const int SETTINGS_MCMP_IDX        = 3;
   static const int SETTINGS_AEIC_IDX        = 4;
   static const int SETTINGS_MCOIMG_IDX      = 5;
-  static const int SETTINGS_ROT_IDX         = 6;
-  static const int SETTINGS_UNREAD_IDX      = 7;
-  static const int SETTINGS_LOG_IDX         = 8;
-  static const int SETTINGS_BACK_IDX        = 9;
+#if UI_NOISE_PAGE == 1
+  static const int SETTINGS_NOISE_IDX       = 6;
+#endif
+#if UI_PAGE_BATT
+  static const int SETTINGS_BATT_CAP_IDX    = 6 + SETTINGS_NOISE_ROWS;
+  static const int SETTINGS_RADIO_IDX       = 7 + SETTINGS_NOISE_ROWS;
+#endif
+  static const int SETTINGS_ROT_IDX         = 6 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_UNREAD_IDX      = 7 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_LOG_IDX         = 8 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_BACK_IDX        = 9 + SETTINGS_EXTRA_ROWS;
 #endif
 
 #ifdef WITH_WIFI_SWITCHING
@@ -264,7 +440,10 @@ class HomeScreen : public UIScreen {
   int _sensors_visible_rows = UI_RECENT_LIST_SIZE;  // updated each render()
   int next_sensors_refresh = 0;
 
-  void refresh_sensors() {
+  // The caller sets the cadence: pages that show slow values want a long one,
+  // the INA page wants a short one. Both share one LPP buffer, and only one page
+  // is ever on screen, so they cannot fight over it.
+  void refresh_sensors(int interval_ms) {
     if (millis() > next_sensors_refresh) {
       sensors_lpp.reset();
       sensors_nb = 0;
@@ -277,11 +456,7 @@ class HomeScreen : public UIScreen {
         reader.skipData(type);
         sensors_nb ++;
       }
-#if AUTO_OFF_MILLIS > 0
-      next_sensors_refresh = millis() + 5000; // refresh sensor values every 5 sec
-#else
-      next_sensors_refresh = millis() + 60000; // refresh sensor values every 1 min
-#endif
+      next_sensors_refresh = millis() + interval_ms;
     }
   }
 
@@ -295,6 +470,11 @@ public:
   }
 
   bool isOnClockPage() const { return _page == CLOCK; }
+#if UI_NOISE_PAGE == 1
+  // The noise page is a live instrument: it holds the panel awake by itself,
+  // unlike every other page which obeys the normal auto-off timer.
+  bool isOnNoisePage() const { return _page == NOISE; }
+#endif
   void incrementClockPM() { _clock_pm_pending++; }
   int  getPmClockMode()  const { return _pm_clock_mode; }
 
@@ -526,6 +706,7 @@ public:
         display.drawTextCentered(display.width() / 2, display.height() - 8, sourceBuf);
       }
       return 60000;  // refresh once per minute
+#if UI_PAGE_RECENT
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
       display.setColor(UIColor::primary_txt);
@@ -550,6 +731,7 @@ public:
         display.setCursor(display.width() - timestamp_width - 1, y);
         display.print(tmp);
       }
+#endif
     } else if (_page == HomePage::RADIO) {
       display.setColor(UIColor::secondary_txt);
       display.setTextSize(hdr_size);
@@ -573,7 +755,7 @@ public:
         snprintf(tmp, sizeof(tmp), "Noise floor: %d", radio_driver.getNoiseFloor());
         display.setCursor(0, y); display.print(tmp);
       }
-#ifndef WITH_WIFI_SWITCHING
+#if UI_PAGE_BLUETOOTH && !defined(WITH_WIFI_SWITCHING)
     } else if (_page == HomePage::BLUETOOTH) {
       display.setColor(UIColor::primary_txt);
       display.drawXbm((display.width() - 32) / 2, content_y,
@@ -582,12 +764,14 @@ public:
       display.setTextSize(hdr_size);
       display.drawTextCentered(display.width() / 2, display.height() - 8*hdr_size - 2, "toggle: " PRESS_LABEL);
 #endif
+#if UI_PAGE_ADVERT
     } else if (_page == HomePage::ADVERT) {
       display.setColor(UIColor::primary_txt);
       display.drawXbm((display.width() - 32) / 2, content_y, advert_icon, 32, 32);
       display.setTextSize(hdr_size);
       display.drawTextCentered(display.width() / 2, display.height() - 8*hdr_size - 2, "advert: " PRESS_LABEL);
-#if ENV_INCLUDE_GPS == 1
+#endif
+#if UI_PAGE_GPS
     } else if (_page == HomePage::GPS) {
       LocationProvider* nmea = sensors.getLocationProvider();
       char buf[50];
@@ -635,7 +819,7 @@ public:
     } else if (_page == HomePage::SENSORS) {
       display.setTextSize(hdr_size);
       int y = content_y;
-      refresh_sensors();
+      refresh_sensors(UI_SENSORS_REFRESH_MS);
       char buf[30];
       char name[30];
 
@@ -731,6 +915,235 @@ public:
         y += line_h;
       }
       // No auto-scroll: offset is controlled manually via KEY_UP / KEY_DOWN
+#endif
+#if UI_INA_PAGE == 1
+    } else if (_page == HomePage::INA) {
+      display.setTextSize(1);
+      refresh_sensors(UI_INA_REFRESH_MS);
+
+      // Two of the three INA3221 rails are shown: the battery the node runs
+      // from (BATT) and the charger feeding it (CHRG). The third is ignored.
+      // Each enabled INA hardware channel publishes Voltage + Current + Power
+      // on its own LPP channel, so they are picked out by channel number.
+      float v_batt = 0, a_batt = 0;
+      float v_chrg = 0, a_chrg = 0;
+      bool has_batt = false, has_chrg = false;
+
+      LPPReader r(sensors_lpp.getBuffer(), sensors_lpp.getSize());
+      uint8_t channel, type;
+      while (r.readHeader(channel, type)) {
+        if (channel != INA_CHANNEL_BATT && channel != INA_CHANNEL_CHRG) {
+          r.skipData(type);
+          continue;
+        }
+        const bool is_batt = (channel == INA_CHANNEL_BATT);
+        float v;
+        switch (type) {
+          case LPP_VOLTAGE:
+            r.readVoltage(v);
+            if (is_batt) { v_batt = v; has_batt = true; } else { v_chrg = v; has_chrg = true; }
+            break;
+          case LPP_CURRENT:
+            r.readCurrent(v);
+            // Magnitude only on this page: a discharging rail reads negative
+            // through the shunt, and a minus sign appearing and vanishing would
+            // jog every column sideways as it came and went.
+            v = fabsf(v);
+            if (is_batt) a_batt = v; else a_chrg = v;
+            break;
+          default:
+            // LPP_POWER lands here and is deliberately dropped: CayenneLPP
+            // carries power as whole watts (LPP_POWER_MULT is 1), so an 8.94 W
+            // rail arrives as 8 and no amount of printf precision brings the
+            // fraction back. Power is recomputed as V * A below instead.
+            r.skipData(type);
+        }
+      }
+
+      // Three right-aligned numeric columns under a one-letter header. The
+      // literal "BATT: 4.22V 2.12A 8.94W" would need 23 of the 21 columns a
+      // 128px display gives in glcdfont6x8. Moving the unit letters into the
+      // header buys the room for two decimals on all three numbers, plus the
+      // charge counter on a fourth line — and four lines is all that fits
+      // between content_y and the bottom edge.
+      struct InaRow { const char* label; float v, a; bool found; };
+      const InaRow rows[2] = {
+        { "BATT", v_batt, a_batt, has_batt },
+        { "CHRG", v_chrg, a_chrg, has_chrg },
+      };
+
+      char buf[26];
+      int y = content_y;
+
+      snprintf(buf, sizeof(buf), "%-4s %5s%5s%5s", "", "V", "A", "W");
+      display.setCursor(0, y);
+      display.print(buf);
+      y += line_h;
+
+      for (int i = 0; i < 2; i++) {
+        if (rows[i].found) {
+          // Past 9.99 W a second decimal would push the column off the right
+          // edge, so the wattage steps down to one decimal and keeps its slot.
+          float w = rows[i].v * rows[i].a;
+          if (w > 9.99f)
+            snprintf(buf, sizeof(buf), "%-4s %5.2f%5.2f%5.1f",
+                     rows[i].label, rows[i].v, rows[i].a, w);
+          else
+            snprintf(buf, sizeof(buf), "%-4s %5.2f%5.2f%5.2f",
+                     rows[i].label, rows[i].v, rows[i].a, w);
+        } else {
+          snprintf(buf, sizeof(buf), "%-4s %5s%5s%5s", rows[i].label, "--", "--", "--");
+        }
+        display.setCursor(0, y);
+        display.print(buf);
+        y += line_h;
+      }
+
+#if defined(DARKTEC)
+      // Charge poured into the pack since the current charger appeared, kept by
+      // DarktecBoard::loop(). It freezes when the charger goes away, so the
+      // finished session stays readable here until the next one is attached.
+      snprintf(buf, sizeof(buf), "BATT CHRG: %lu mAh",
+               (unsigned long)board.getChargeMah());
+      display.setCursor(0, y);
+      display.print(buf);
+#endif
+
+      // Redraw at the same cadence the values are re-read at, so what is on
+      // screen is never older than one snapshot.
+      return UI_INA_REFRESH_MS;
+#endif
+#if UI_NOISE_PAGE == 1
+    } else if (_page == HomePage::NOISE) {
+      display.setTextSize(1);
+
+      // The core recomputes the floor every NOISE_FLOOR_CALIB_INTERVAL and keeps
+      // it as a cached int, so reading it costs nothing and never touches the
+      // radio. Sampling here only decides how finely the trace is drawn.
+      // Trace step comes from Settings. The columns are spaced by wall time, so
+      // a faster step scrolls the same 64 samples past in proportionally less
+      // time — at 100 ms the window covers about 6 seconds, at 1000 ms about 64.
+      const int sample_ms = _node_prefs
+          ? NOISE_SPEED_MS[constrain(_node_prefs->ui_noise_speed_idx, 0, 3)]
+          : NOISE_SAMPLE_MILLIS;
+      if ((long)(millis() - next_noise_sample) >= 0) {
+        noise_hist[noise_head] = (int16_t)radio_driver.getNoiseFloor();
+        noise_head = (uint8_t)((noise_head + 1) % NOISE_SAMPLES);
+        if (noise_count < NOISE_SAMPLES) noise_count++;
+        next_noise_sample = millis() + sample_ms;
+      }
+
+      // Auto-scale to the smoothed series, not the raw one. A three-point
+      // average never reaches the raw extremes — it pulls them toward the mean —
+      // so scaling to those would reserve a band at the top and bottom of the
+      // plot that no amount of signal could ever fill.
+      int lo = 0, hi = 0;
+      for (int i = 0; i < noise_count; i++) {
+        int v = noiseSmoothedAt(i);
+        if (i == 0)      { lo = v; hi = v; }
+        else if (v < lo) { lo = v; }
+        else if (v > hi) { hi = v; }
+      }
+      // A floor on the span keeps a dead-flat trace from being stretched into
+      // fake detail.
+      if (hi - lo < 8) {
+        int mid = (lo + hi) / 2;
+        lo = mid - 4;
+        hi = mid + 4;
+      }
+
+      // The plot claims everything between the page dots and the footer — the
+      // space the old NOISE headline used to occupy, plus more.
+      const int plot_y = hdr_line_h + 9;
+      const int foot_y = display.height() - 9;
+      const int plot_h = foot_y - 2 - plot_y;
+      int bar_w = display.width() / NOISE_SAMPLES;
+      if (bar_w < 1) bar_w = 1;
+
+      char nbuf[24];
+      display.setColor(UIColor::secondary_txt);
+      display.fillRect(0, plot_y + plot_h - 1, display.width(), 1);
+
+      // A trace, not filled bars: each column joins the previous smoothed value
+      // to the current one. Filled bars of a steady floor merge into a single
+      // slab and hide the very variation they exist to show.
+      const int y_top = plot_y;
+      const int y_bot = plot_y + plot_h - 2;
+      display.setColor(UIColor::primary_txt);
+      int prev_y = -1;
+      for (int i = 0; i < noise_count; i++) {
+        int v = noiseSmoothedAt(i);
+        int y = y_bot - (v - lo) * (y_bot - y_top) / (hi - lo);
+        if (y < y_top) y = y_top;
+        if (y > y_bot) y = y_bot;
+
+        if (prev_y < 0) {
+          display.fillRect(i * bar_w, y, bar_w, 2);
+        } else {
+          int top = (y < prev_y) ? y : prev_y;
+          int bot = (y < prev_y) ? prev_y : y;
+          display.fillRect(i * bar_w, top, bar_w, bot - top + 2);
+        }
+        prev_y = y;
+      }
+
+      // Footer: window floor left, live value centred, window ceiling right.
+      snprintf(nbuf, sizeof(nbuf), "%d", lo);
+      display.setCursor(0, foot_y);
+      display.print(nbuf);
+
+      snprintf(nbuf, sizeof(nbuf), "NF: %d", radio_driver.getNoiseFloor());
+      display.drawTextCentered(display.width() / 2, foot_y, nbuf);
+
+      snprintf(nbuf, sizeof(nbuf), "%d", hi);
+      display.setCursor(display.width() - display.getTextWidth(nbuf) - 1, foot_y);
+      display.print(nbuf);
+
+      return sample_ms;
+#endif
+#if UI_PAGE_BATT
+    } else if (_page == HomePage::BATT) {
+      display.setTextSize(1);
+      refresh_sensors(UI_INA_REFRESH_MS);
+
+      // Pack voltage straight off the INA rail the node runs from.
+      float pack_v = 0.0f;
+      bool have_v = false;
+      LPPReader r(sensors_lpp.getBuffer(), sensors_lpp.getSize());
+      uint8_t channel, type;
+      while (r.readHeader(channel, type)) {
+        if (type == LPP_VOLTAGE && channel == INA_CHANNEL_BATT) {
+          r.readVoltage(pack_v);
+          have_v = true;
+        } else {
+          r.skipData(type);
+        }
+      }
+
+      char bbuf[26];
+      int by = content_y;
+      uint32_t remain = board.getRemainMah();
+      uint32_t capacity = board.getCapacityMah();
+
+      if (have_v) snprintf(bbuf, sizeof(bbuf), "VOLT   %.2fV", pack_v);
+      else        snprintf(bbuf, sizeof(bbuf), "VOLT   --");
+      display.setCursor(0, by); display.print(bbuf); by += line_h;
+
+      snprintf(bbuf, sizeof(bbuf), "REMAIN %lumAh %u%%",
+               (unsigned long)remain,
+               capacity ? (unsigned)(remain * 100u / capacity) : 0u);
+      display.setCursor(0, by); display.print(bbuf); by += line_h;
+
+      uint32_t eta_min = board.getEtaMinutes();
+      snprintf(bbuf, sizeof(bbuf), "ETA    %luh %lum",
+               (unsigned long)(eta_min / 60), (unsigned long)(eta_min % 60));
+      display.setCursor(0, by); display.print(bbuf); by += line_h;
+
+      snprintf(bbuf, sizeof(bbuf), "Iavg   %umA",
+               (unsigned)(board.getAverageLoadMa() + 0.5f));
+      display.setCursor(0, by); display.print(bbuf);
+
+      return UI_INA_REFRESH_MS;
 #endif
 #if !(defined(UI_NO_DISCOVER_SCREEN) && (UI_NO_DISCOVER_SCREEN + 0 != 0))
     } else if (_page == HomePage::DISCOVERY) {
@@ -921,6 +1334,13 @@ public:
           else if (i == SETTINGS_MCMP_IDX)   lbl = "MCMP detect";
           else if (i == SETTINGS_AEIC_IDX)   lbl = "AEIC detect";
           else if (i == SETTINGS_MCOIMG_IDX) lbl = "MCOimg detect";
+#if UI_NOISE_PAGE == 1
+          else if (i == SETTINGS_NOISE_IDX)  lbl = "NF Speed";
+#endif
+#if UI_PAGE_BATT
+          else if (i == SETTINGS_BATT_CAP_IDX) lbl = "Batt Cap";
+          else if (i == SETTINGS_RADIO_IDX)    lbl = "Radio Mod";
+#endif
           else if (i == SETTINGS_ROT_IDX)      lbl = "Rotation";
           else if (i == SETTINGS_UNREAD_IDX)  lbl = "Max Unread";
           else if (i == SETTINGS_LOG_IDX)     lbl = "Max Log";
@@ -970,6 +1390,20 @@ public:
               snprintf(val, sizeof(val), "%s", the_mesh.isAEICDetectEnabled() ? "On" : "Off");
             } else if (i == SETTINGS_MCOIMG_IDX) {
               snprintf(val, sizeof(val), "%s", the_mesh.isMCOimgDetectEnabled() ? "On" : "Off");
+#if UI_NOISE_PAGE == 1
+            } else if (i == SETTINGS_NOISE_IDX && _node_prefs) {
+              snprintf(val, sizeof(val), "%dms",
+                       NOISE_SPEED_MS[constrain(_node_prefs->ui_noise_speed_idx, 0, 3)]);
+#endif
+#if UI_PAGE_BATT
+            } else if (i == SETTINGS_BATT_CAP_IDX && _node_prefs) {
+              snprintf(val, sizeof(val), "%lumAh",
+                       (unsigned long)BATT_CAPACITY_MAH[
+                           constrain(_node_prefs->ui_batt_capacity_idx, 0, 1)]);
+            } else if (i == SETTINGS_RADIO_IDX && _node_prefs) {
+              snprintf(val, sizeof(val), "%s", RADIO_MODULE_LABEL[
+                           constrain(_node_prefs->ui_radio_module_idx, 0, 2)]);
+#endif
             } else if (i == SETTINGS_ROT_IDX && _node_prefs) {
               static const char* rot_vals[4] = { "0", "90", "180", "270" };
               snprintf(val, sizeof(val), "%s deg", rot_vals[constrain(_node_prefs->ui_display_rotation, 0, 3)]);
@@ -1133,6 +1567,27 @@ public:
           the_mesh.setAEICDetectEnabled(!the_mesh.isAEICDetectEnabled());
         } else if (sel == SETTINGS_MCOIMG_IDX) {
           the_mesh.setMCOimgDetectEnabled(!the_mesh.isMCOimgDetectEnabled());
+#if UI_NOISE_PAGE == 1
+        } else if (sel == SETTINGS_NOISE_IDX && _node_prefs) {
+          int idx = _node_prefs->ui_noise_speed_idx;
+          idx = fwd ? (idx + 1) % 4 : (idx + 3) % 4;
+          _node_prefs->ui_noise_speed_idx = idx;
+          the_mesh.savePrefs();
+#endif
+#if UI_PAGE_BATT
+        } else if (sel == SETTINGS_BATT_CAP_IDX && _node_prefs) {
+          // Two entries only, so either direction flips to the other one.
+          int idx = (_node_prefs->ui_batt_capacity_idx + 1) % 2;
+          _node_prefs->ui_batt_capacity_idx = idx;
+          board.setBatteryCapacityMah((float)BATT_CAPACITY_MAH[idx]);
+          the_mesh.savePrefs();
+        } else if (sel == SETTINGS_RADIO_IDX && _node_prefs) {
+          int idx = _node_prefs->ui_radio_module_idx;
+          idx = fwd ? (idx + 1) % 3 : (idx + 2) % 3;
+          _node_prefs->ui_radio_module_idx = idx;
+          board.setTxCurrentMa(RADIO_TX_MA[idx]);
+          the_mesh.savePrefs();
+#endif
 #ifdef WITH_COMPANION_CLI
         } else if (sel == 0) {
           int m = the_mesh.getChatMode();
@@ -1211,7 +1666,7 @@ public:
 #endif
       return true;
     }
-#ifndef WITH_WIFI_SWITCHING
+#if UI_PAGE_BLUETOOTH && !defined(WITH_WIFI_SWITCHING)
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
@@ -1221,6 +1676,7 @@ public:
       return true;
     }
 #endif
+#if UI_PAGE_ADVERT
     if (c == KEY_ENTER && _page == HomePage::ADVERT) {
       _task->notify(UIEventType::ack);
       if (the_mesh.advert()) {
@@ -1230,7 +1686,8 @@ public:
       }
       return true;
     }
-#if ENV_INCLUDE_GPS == 1
+#endif
+#if UI_PAGE_GPS
     if (c == KEY_ENTER && _page == HomePage::GPS) {
       _task->toggleGPS();
       return true;
@@ -1625,6 +2082,19 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _node_prefs = node_prefs;
   if (_node_prefs != NULL) {
     setClockDimMode(_node_prefs->ui_clock_dim_mode);
+#if UI_PAGE_BATT
+    // Hand the board its nameplate capacity before the first tick, so the
+    // discharge model starts from the configured figure rather than the default.
+    board.setBatteryCapacityMah(
+        (float)BATT_CAPACITY_MAH[constrain(_node_prefs->ui_batt_capacity_idx, 0, 1)]);
+    // And the module fitted, so the transmit pulses are priced correctly.
+    board.setTxCurrentMa(RADIO_TX_MA[constrain(_node_prefs->ui_radio_module_idx, 0, 2)]);
+    // Restore the charge estimate saved before the last reboot, so the page does
+    // not have to re-derive it from voltage alone.
+    if (_node_prefs->ui_remain_valid) {
+      board.setRemainMah(_node_prefs->ui_remain_mah);
+    }
+#endif
   }
 
   if (_display != NULL) {
@@ -1979,11 +2449,25 @@ void UITask::loop() {
   // Timers on the sensors page use this state, so update it before rendering.
   updateUsbState(true);
 
+#if UI_PAGE_BATT
+  // Keep the persisted copy current. The prefs flush just below carries it to
+  // flash together with the uptime counter, so this adds no writes of its own.
+  if (_node_prefs != NULL) {
+    _node_prefs->ui_remain_mah = board.getRemainMah();
+    _node_prefs->ui_remain_valid = 1;
+  }
+#endif
+
   _saveElapsedToPrefs();  // saves at most once per 60s; turnOff() also triggers this
 
   if (curr) curr->poll();
 
-  if (_display != NULL && _display->isOn()) {
+  // Evaluated once per pass either way. The board uses it to pick the right
+  // idle current when modelling its own draw for the battery estimate.
+  bool display_on = (_display != NULL && _display->isOn());
+  board.setDisplayOn(display_on);
+
+  if (display_on) {
     if (millis() >= _next_refresh && curr) {
       _display->startFrame();
       int delay_millis = curr->render(*_display);
@@ -2013,6 +2497,13 @@ void UITask::loop() {
     if (board.isExternalPowered()) {
       _auto_off = millis() + AUTO_OFF_MILLIS;
     }
+#endif
+#if UI_NOISE_PAGE == 1
+    // The noise page is a live instrument, so it holds the panel awake on its
+    // own — unconditionally, unlike the CLOCK page which only does so under the
+    // clock-dim preference. Every other page keeps the normal timeout.
+    if (home && ((HomeScreen*)home)->isOnNoisePage())
+      _auto_off = millis() + AUTO_OFF_MILLIS;
 #endif
     if (_clock_dim_mode == 1) {
       // OFF: no dim while on CLOCK page
@@ -2069,6 +2560,24 @@ char UITask::handleLongPress(char c) {
     the_mesh.enterCLIRescue();
     c = 0;   // consume event
   }
+#if UI_NOISE_PAGE == 1
+  else if (curr && home && curr == home
+           && ((HomeScreen*)home)->isOnNoisePage() && _node_prefs) {
+    // On the noise page a long press steps the trace speed without leaving the
+    // graph. The popup names the new value and clears itself after two seconds;
+    // the event is consumed so the page does not also act on the ENTER it would
+    // otherwise have received.
+    int idx = (_node_prefs->ui_noise_speed_idx + 1) % 4;
+    _node_prefs->ui_noise_speed_idx = idx;
+    the_mesh.savePrefs();
+
+    char msg[24];
+    snprintf(msg, sizeof(msg), "NF Speed: %dms", NOISE_SPEED_MS[idx]);
+    showAlert(msg, 2000);
+    _next_refresh = 0;   // draw the popup on the next pass
+    c = 0;
+  }
+#endif
   return c;
 }
 
