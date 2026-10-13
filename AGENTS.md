@@ -97,6 +97,38 @@
 
 **Осторожно с определениями UART в `variant.h`.** Там записано `PIN_SERIAL1_TX=1` и `PIN_SERIAL1_RX=0`, то есть устаревшая привязка UART к **тем же самым** ногам P0.06 (буззер) и P0.08 (T2). На реальной плате UART живёт на P0.20/P0.22 (`PIN_GPS_RX=3` / `PIN_GPS_TX=4`): при `ENV_INCLUDE_GPS=1` вызов `EnvironmentSensorManager::initBasicGPS()` делает `Serial1.setPins(PIN_GPS_TX, PIN_GPS_RX)` и уводит его туда. Но маршрут `WITH_RS232_BRIDGE_RX/TX` в двух env по-прежнему ссылается на `PIN_SERIAL1_RX/TX`. **Если буззер вдруг замолчал или заквакал странно — первым делом проверяй, не поднялся ли Serial1 на P0.06.**
 
+### Удалённо управляемые выходы: ключ RELAY (T2)
+
+Реле на T2 управляется **штатным механизмом настроек сенсоров** — протокол, приложение и каналы не трогались вообще. Реализация целиком в `variants/darktec/DarktecSensorManager.h` (обёртка над `EnvironmentSensorManager`, общий код для всех 16 env).
+
+Команды (регистр не важен):
+
+```
+sensor set RELAY ON | OFF | TOGGLE     ->  "RELAY: ON" / "RELAY: OFF"
+sensor get RELAY                       ->  "> ON" / "> OFF"
+sensor list                            ->  RELAY=... (и прочие настройки)
+```
+
+Принимаются также `1`/`0`, `true`/`false`, `yes`/`no`, синонимы ключа `t2`. **При старте реле всегда выключено** — так решил владелец (безопасно для силовой нагрузки). Состояние намеренно НЕ сохраняется в prefs.
+
+Как команда доходит до ноды:
+
+| Роль | Путь |
+|---|---|
+| Репитер | личка от админа → CLI (`simple_repeater/MyMesh.cpp:812`) |
+| Комнатный сервер | личка/пост от админа → CLI (`simple_room_server/MyMesh.cpp:441,467`) |
+| Сенсор | личка от админа → CLI (`simple_sensor/SensorMesh.cpp:561`) |
+| Компаньон | **Remote CLI**: личка вида `<CLI-PIN> <команда>` (`companion_radio/MyMesh.cpp:835`) или канал `TerminalCLI` (`:1676`) |
+| Любая роль от приложения | serial/BLE `CMD_SET_CUSTOM_VAR` в формате `RELAY:ON` (`companion_radio/MyMesh.cpp:2417`) |
+
+**Remote CLI у компаньона** — основной путь для бытового сценария («нода дома, я с телефоном в городе»): PIN это 8 hex-символов от последних 4 байт **приватного** ключа (не выводится из публичного), смотреть командой `pin`, включается `set remote.cli on/off` (по умолчанию on). Ответ приходит личкой, длинный режется на чанки `[1/N]`.
+
+**Важно про «приватные» каналы:** канал в MeshCore — это групповой канал на общем PSK, а не адресная переписка. У `TerminalCLI` PSK вообще фиксированный и публичный (`MyMesh.h:89`). Для секретных команд использовать Remote CLI по личке, а не каналы.
+
+**Что НЕ сделано (осознанно):** ключ `GPSPWR` для T1 (питание GPS) зарезервирован, но возвращает `false`. Причина: `setSettingValue("gps", ...)` управляет только данными, а чипу GPS после подачи питания нужна пауза на старт — иначе детект GPS сломается. Делать это надо вместе с драйвером GPS, а не отдельным ключом.
+
+**Грабли сборки:** `.pio/libdeps` в этой папке тоже побит Яндекс.Диском — 13.10.2026 из 22 библиотек 20 оказались пустыми (нет `library.json`, нет `src`). Если PlatformIO падает с `MissingPackageManifestError` или «библиотека не найдена» — удали `.pio/libdeps/<env>` и запусти `pio pkg install -e <env>`. PlatformIO живёт в `%USERPROFILE%\.platformio\penv\Scripts\pio.exe` и в PATH его нет; сборка одного env ~35 с.
+
 ## Cursor Cloud specific instructions
 
 This repo is the **MeshCore `south_edition` firmware** — embedded C++ built with **PlatformIO** (Arduino framework). There are **no servers, databases, or long-running services**; the product is firmware binaries flashed onto LoRa radio boards. "Running the app" without physical hardware means (a) running the native host unit tests and (b) compiling a firmware target into a `.bin`/`.uf2`.

@@ -13,9 +13,9 @@ AutoDiscoverRTCClock rtc_clock(fallback_clock);
 #if ENV_INCLUDE_GPS
   #include <helpers/sensors/MicroNMEALocationProvider.h>
   MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
-  EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
+  DarktecSensorManager sensors(nmea);
 #else
-  EnvironmentSensorManager sensors;
+  DarktecSensorManager sensors;
 #endif
 
 #ifdef DISPLAY_CLASS

@@ -24,11 +24,14 @@
 #endif
 
 #include <helpers/sensors/EnvironmentSensorManager.h>
+#include <DarktecSensorManager.h>
 
 extern DarktecBoard board;
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
-extern EnvironmentSensorManager sensors;
+// Обёртка над EnvironmentSensorManager: добавляет удалённо управляемые выходы
+// (RELAY = T2). Общий код для всех ролей — см. DarktecSensorManager.h.
+extern DarktecSensorManager sensors;
 
 #ifdef DISPLAY_CLASS
   extern DISPLAY_CLASS display;
