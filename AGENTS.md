@@ -129,6 +129,26 @@ sensor list                            ->  RELAY=... (и прочие настр
 
 **Грабли сборки:** `.pio/libdeps` в этой папке тоже побит Яндекс.Диском — 13.10.2026 из 22 библиотек 20 оказались пустыми (нет `library.json`, нет `src`). Если PlatformIO падает с `MissingPackageManifestError` или «библиотека не найдена» — удали `.pio/libdeps/<env>` и запусти `pio pkg install -e <env>`. PlatformIO живёт в `%USERPROFILE%\.platformio\penv\Scripts\pio.exe` и в PATH его нет; сборка одного env ~35 с.
 
+### Сборка прошивок и UF2: чего `pio run` НЕ делает
+
+**`pio run` НЕ создаёт `.uf2`.** Он делает только `firmware.elf`, `firmware.hex` и `firmware.zip`. Причём `firmware.zip` — это пакет Nordic DFU, внутри лежат `firmware.bin`, `firmware.dat` и `manifest.json`; **никакого UF2 там нет**. Если владелец спрашивает «где uf2» — их надо создать отдельно, это не ошибка сборки.
+
+Способы получить `.uf2`:
+
+1. **Цель `create_uf2`** (её использует `build-darktec-uf2.ps1`): `pio run -e <env> -t create_uf2` → `.pio/build/<env>/firmware.uf2`.
+2. **Напрямую `bin/uf2conv/uf2conv.py`** (обходит проблему с кириллицей, см. ниже):
+   `python bin\uf2conv\uf2conv.py <.pio\...\firmware.hex> -c -o <.pio\...\firmware.uf2> -f 0xADA52840`
+
+Проверка, что файл настоящий UF2: первые 4 байта `55 46 32 0a`, последние 4 байта блока `30 6f b1 0a`, familyID (байты 28–31) `40 28 a5 ad` = `0xADA52840`, размер кратен 512.
+
+**ГЛАВНАЯ ГРАБЛЯ: кириллица в пути.** Проект лежит в `…\YandexDisk\Компьютер ANDREY_PC\…`, а `create-uf2.py` собирает команду строкой через `env.Execute`, и путь до питона доезжает искажённым (`��������� ANDREY_PC`) → `uf2conv.py: error: unrecognized arguments`, цель падает. Поэтому:
+
+- `build-darktec-uf2.ps1` в этом случае печатает ошибку uf2conv, но **всё равно выкладывает файл** — он делает `Copy-Item` из `.pio\build\<env>\firmware.uf2`, а его создаёт PlatformIO своим внутренним питоном. Файл валидный, можно прошивать.
+- Если нужен надёжный `-t create_uf2` и вообще спокойная сборка — **вынести проект в путь без кириллицы** (например `C:\Dev\MeshCore`). Это же лечит и болячки Яндекс.Диска.
+- Готовые UF2 удобно складывать в `out\uf2\` (каталог в `.gitignore`) с именем `<env>-<версия>-<дата>.uf2`.
+
+**Запуск `.ps1` в этой системе:** `ExecutionPolicy = Restricted`, поэтому скрипты не запускаются напрямую. Обоход: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-darktec-uf2.ps1 -Env <env>` (именно `powershell.exe`, а не `pwsh` — на этой машине есть только Windows PowerShell 5.1).
+
 ## Cursor Cloud specific instructions
 
 This repo is the **MeshCore `south_edition` firmware** — embedded C++ built with **PlatformIO** (Arduino framework). There are **no servers, databases, or long-running services**; the product is firmware binaries flashed onto LoRa radio boards. "Running the app" without physical hardware means (a) running the native host unit tests and (b) compiling a firmware target into a `.bin`/`.uf2`.
