@@ -4,6 +4,28 @@
 
 - Always communicate with the repository owner in **Russian**, even when they write in English. Do not switch to another language unless they explicitly ask for it in a given request.
 
+## Git-синхронизация: владелец не пользуется GitHub
+
+Владелец репозитория (MacMillan25) **не умеет и не хочет работать с GitHub** — ни через сайт, ни через командную строку. Он работает с ИИ-ассистентом на **двух компьютерах** и ожидает, что **весь Git берёт на себя ассистент**:
+
+- **«сохрани» / «залей» / «закинь на гит»** — закоммить изменения и сделай `git push` в `origin` сам, без вопросов «а какую ветку?».
+- **«всё с Гита» / «обнови» / «скачай»** — сделай `git fetch --all --prune`, покажи, что нового, и переключи/подтяни так, чтобы рабочая папка стала актуальной; при необходимости сообщи, что изменилось.
+- Перед переключением ветки или перезаписью файлов **проверь, нет ли незакоммиченных правок** — и никогда не теряй работу владельца молча.
+- Работай с `origin` = <https://github.com/MacMillan25/MeshCore.git> (его форк). `upstream` (`meshcore-dev/MeshCore`) — только для чтения, не пушить туда.
+- Учётные данные GitHub уже сохранены в Windows Credential Manager (пользователь `MacMillan25`) — доступ на запись проверен, push работает. Ничего настраивать не нужно.
+- Полезные ветки владельца: `feat/darktec-e22p` (актуальная на 13.10.2026), `dev-darktec`, `south_edition`. `main` — релизная ветка форка.
+- Коммиты пиши на русском, в стиле истории репозитория: `fix(darktec): …`, `feat(darktec): …`, `chore: …`.
+- Если работал с файлами — заканчивай сессию чистой рабочей папкой (`git status`), чтобы следующая машина не спотыкалась.
+
+### Ловушка этой рабочей папки: Яндекс.Диск
+
+Репозиторий лежит **внутри синхронизируемой папки Яндекс.Диска** (`…\YandexDisk\Компьютер ANDREY_PC\Meshcore\MeshCore-git`). Из-за этого:
+
+- Яндекс.Диск переписывает текстовые файлы, **меняя LF на CRLF**, и иногда обрывает запись на середине — 13.10.2026 это уже уничтожило 708 файлов и половину каталога `.git` (HEAD, config, index, `.idx` pack-файла).
+- Если `git status` показывает изменёнными кучу файлов, которые ты не трогал — **сначала проверь хеши**, а не коммить: `git hash-object --no-filters -- <файл>` против `git rev-parse HEAD:<файл>`. Совпали — значит правок нет.
+- Если расходятся **только переводы строк** — правь их через `git add --renormalize -- <файлы>`, а не перезаписью файлов.
+- Никогда не делай `git clean -fdx` и подобную массовую зачистку, не убедившись, что там нет работы владельца.
+
 ## Cursor Cloud specific instructions
 
 This repo is the **MeshCore `south_edition` firmware** — embedded C++ built with **PlatformIO** (Arduino framework). There are **no servers, databases, or long-running services**; the product is firmware binaries flashed onto LoRa radio boards. "Running the app" without physical hardware means (a) running the native host unit tests and (b) compiling a firmware target into a `.bin`/`.uf2`.
