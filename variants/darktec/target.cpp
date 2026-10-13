@@ -25,7 +25,8 @@ AutoDiscoverRTCClock rtc_clock(fallback_clock);
 
 bool radio_init() {
   rtc_clock.begin(Wire);
-  
+
+  // EN модуля уже поднят в DarktecBoard::begin() и библиотеке не подчиняется.
   return radio.std_init(&SPI);
 }
 
