@@ -62,6 +62,35 @@
 | P0.13 | 21 | `SX126X_POWER_EN`, `PIN_EXT_VCC` |
 | P1.00 | 6 | `PIN_USER_BTN` / `PIN_BUTTON1` |
 
+### Железо DarkTec: три транзистора
+
+На плате стоят три управляемых N-канальных мосфета. Что выяснено (проверено по коду и на устройстве владельца, 2026):
+
+| Транзистор | Нога MCU | Arduino-пин | Занято под |
+|---|---|---|---|
+| **T1** | P0.24 | 5 | `PIN_GPS_EN` — питание/включение GPS (номинально ещё и `PIN_SPI_NSS`) |
+| **T2** | P0.08 | 0 | `PIN_BOARD_SDA` — I2C-шина OLED (см. оговорку ниже) |
+| **T3** | P0.06 | 1 | **`PIN_BUZZER`** — буззер; уже работает |
+
+- **T3 подтверждён и работает.** `-D PIN_BUZZER=1` во всех четырёх companion-env (`Darktec_companion_radio_usb/_ble` и их `_e22p`). Нога 1 через `g_ADigitalPinMap` = P0.06. Буззер играет через `NonBlockingRTTTL`, который гоняет квадратную волну прямо по этому пину, а транзистор работает ключом. Отдельного `PIN_BUZZER_EN` у DarkTec НЕТ — роль включателя выполняет сам транзистор.
+- **T1 — это GPS_EN.** `-D PIN_GPS_EN=5` (Arduino 5 = P0.24). Микросхема GPS включается этим транзистором, поэтому использовать T1 под что-то другое нельзя, не затронув GPS.
+- **Оговорка про T2:** `platformio.ini` задаёт `PIN_BOARD_SDA=8` (сырая нога P0.08) и это уходит в `Wire.setPins()` в `DarktecBoard.cpp`, но `variant.h` определяет `PIN_WIRE_SDA=6` (это P1.00). Какое из двух реально на железе — **не подтверждено**, нужен замер. Если SDA действительно на P0.08, то T2 занят шиной OLED.
+
+### Цепочка буззера (тройное нажатие кнопки)
+
+```
+3× нажатие BTN
+  -> UITask::handleTripleClick()      examples/companion_radio/ui-new/UITask.cpp:2590
+  -> UITask::toggleBuzzer()                                          :2634
+  -> buzzer.quiet(true/false)         src/helpers/ui/buzzer.cpp:47
+  -> _node_prefs->buzzer_quiet + savePrefs()
+  -> showAlert("Buzzer: OFF" / "Buzzer: ON")
+```
+
+Звук играет RTTTL по `PIN_BUZZER`; `quiet()` лишь запрещает запуск мелодий. Мелодии — в `src/helpers/ui/buzzer.h` (`startup_song`, `shutdown_song`).
+
+**Важная тонкость про UART:** `variant.h` объявляет `PIN_SERIAL1_TX=1` (та самая нога буззера) и `PIN_SERIAL1_RX=0`, но при `ENV_INCLUDE_GPS=1` вызов `EnvironmentSensorManager::initBasicGPS()` делает `Serial1.setPins(PIN_GPS_TX, PIN_GPS_RX)` — то есть уводит UART на P0.20/P0.22. Если GPS-детект не срабатывает, ноги UART остаются на P0.06/P0.08. Это надо держать в голове при работах с T2 и T3.
+
 ## Cursor Cloud specific instructions
 
 This repo is the **MeshCore `south_edition` firmware** — embedded C++ built with **PlatformIO** (Arduino framework). There are **no servers, databases, or long-running services**; the product is firmware binaries flashed onto LoRa radio boards. "Running the app" without physical hardware means (a) running the native host unit tests and (b) compiling a firmware target into a `.bin`/`.uf2`.
