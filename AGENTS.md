@@ -28,6 +28,40 @@
 - Если расходятся **только переводы строк** — правь их через `git add --renormalize -- <файлы>`, а не перезаписью файлов.
 - Никогда не делай `git clean -fdx` и подобную массовую зачистку, не убедившись, что там нет работы владельца.
 
+## Проект DarkTec: изменения однотипны для всех модулей
+
+Владелец работает над железом **DarkTec** (nRF52840 + SX1262, модули E22 / E22P). Главное правило, которое он просил запомнить:
+
+- **Любая правка, касающаяся модуля или железа, делается ОДИНАКОВО для всех ролей**: репитер, room server, компаньон (USB и BLE), сенсор, KISS-модем, terminal chat. Нельзя поправить только BLE-компаньон и забыть репитер.
+- **И для обоих модулей**: E22 и E22P. В `variants/darktec/platformio.ini` у каждой роли пара env — базовый (E22) и с суффиксом `_e22p`, всего 16 env (8 ролей × 2 модуля).
+- Блоки `build_flags` у пары `X` и `X_e22p` **продублированы вручную** и часто содержат комментарий «менять надо в обоих местах, если что-то поменяется». Правя один env — правь и парный, иначе роли разъедутся.
+- Отличие E22P от E22 — **ровно один флаг**: `-D DARKTEC_RADIO_E22P=1` (секция `[Darktec_e22p_flags]`). Он меняет полярность управления RF-трактом в `DarktecBoard.h`: у E22P пин 6 модуля — это EN (общий enable PA+LNA, держится высоким вручную, RadioLib его не трогает), у E22 — RXEN (управляется RadioLib по таблице RF-ключа).
+
+### Где что лежит в DarkTec
+
+- `variants/darktec/DarktecBoard.h` / `.cpp` — пины радио и платы, инициализация, питание, зарядка, INA3221. Общий код для ВСЕХ ролей.
+- `variants/darktec/variant.h` / `variant.cpp` — таблица `g_ADigitalPinMap`, перевод Arduino-номера пина в ногу nRF (`P0.xx` / `P1.xx`).
+- `variants/darktec/target.cpp` — сборка узла под роль, `MomentaryButton`.
+- `variants/darktec/platformio.ini` — секции `[Darktec]`, `[Darktec_e22]`, `[Darktec_e22p]`, `[Darktec_e22p_flags]` и 16 `[env:...]`.
+
+### Ловушка с номерами пинов
+
+На этой плате **легко перепутать два разных способа нумерации**, потому что в `platformio.ini` рядом соседствуют оба:
+
+- `-D PIN_BOARD_SDA=8` — это **сырая нога P0.08**, номер порта идёт напрямую.
+- `-D PIN_USER_BTN=6` — это **Arduino-пин 6**, который через `g_ADigitalPinMap` даёт `P1.00`, а вовсе не `P0.06`.
+
+Перед любой правкой пинов **сначала проверяй `g_ADigitalPinMap` в `variant.cpp`** и не полагайся на совпадение чисел. Актуальная карта (проверена 2026):
+
+| Нога nRF | Arduino-пин | Занято под |
+|---|---|---|
+| P0.24 | 5 | `PIN_SPI_NSS` |
+| P0.08 | 0 | `PIN_SERIAL1_RX` |
+| P0.06 | 1 | `PIN_SERIAL1_TX` |
+| P0.17 | 2 | EN модуля E22P (только RXEN у E22) |
+| P0.13 | 21 | `SX126X_POWER_EN`, `PIN_EXT_VCC` |
+| P1.00 | 6 | `PIN_USER_BTN` / `PIN_BUTTON1` |
+
 ## Cursor Cloud specific instructions
 
 This repo is the **MeshCore `south_edition` firmware** — embedded C++ built with **PlatformIO** (Arduino framework). There are **no servers, databases, or long-running services**; the product is firmware binaries flashed onto LoRa radio boards. "Running the app" without physical hardware means (a) running the native host unit tests and (b) compiling a firmware target into a `.bin`/`.uf2`.
