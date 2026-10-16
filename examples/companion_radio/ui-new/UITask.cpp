@@ -173,7 +173,7 @@ class SplashScreen : public UIScreen {
   // высоте строки 8 пикселей они налезали друг на друга.
   char _base_version[12];   // "v1.17.1"
   char _build_tag[8];       // "SE" / "E22P", пусто если метки нет
-  char _commit_info[12];    // "#abc1234" или пусто
+  char _version_line[22];   // "v1.17.1 #dcd8b9b1" — версия и номер коммита
 
 public:
   SplashScreen(UITask* task) : _task(task) {
@@ -195,13 +195,25 @@ public:
     if (suflen > 0) memcpy(_build_tag, suffix, suflen);
     _build_tag[suflen] = 0;
 
-    // commit part: "#abc1234" (from the part after '-')
-    if (dash) {
-      _commit_info[0] = '#';
-      strncpy(_commit_info + 1, dash + 1, sizeof(_commit_info) - 2);
-      _commit_info[sizeof(_commit_info) - 1] = 0;
-    } else {
-      _commit_info[0] = 0;
+    // Строка версии: "v1.17.1 #dcd8b9b1".
+    //
+    // Номер коммита приходит из FIRMWARE_VERSION — его подставляет
+    // git_version.py перед сборкой (см. platformio.ini, pre:git_version.py).
+    // Если коммита нет, показываем метку сборки SE/E22P: она говорит только
+    // о радиомодуле, но это лучше, чем пустая строка.
+    strncpy(_version_line, _base_version, sizeof(_version_line) - 1);
+    _version_line[sizeof(_version_line) - 1] = 0;
+    int vlen = (int)strlen(_version_line);
+
+    if (dash && vlen < (int)sizeof(_version_line) - 3) {
+      _version_line[vlen++] = ' ';
+      _version_line[vlen++] = '#';
+      strncpy(_version_line + vlen, dash + 1, sizeof(_version_line) - 1 - vlen);
+      _version_line[sizeof(_version_line) - 1] = 0;
+    } else if (_build_tag[0] && vlen < (int)sizeof(_version_line) - 2) {
+      _version_line[vlen++] = ' ';
+      strncpy(_version_line + vlen, _build_tag, sizeof(_version_line) - 1 - vlen);
+      _version_line[sizeof(_version_line) - 1] = 0;
     }
 
     dismiss_after = millis() + BOOT_SCREEN_MILLIS;
@@ -218,18 +230,16 @@ public:
     display.setTextSize(1);
     display.drawTextCentered(display.width() / 2, 20, "Dark Electronics");
 
-    // Родительская версия прошивки: "v1.17.1" без хвоста сборки и без
-    // хеша коммита — он тут только мешал и налезал на строку ниже.
+    // Родительская версия и номер коммита одной строкой — так обе влезают
+    // (21 символ при ширине символа 6 пикселей), и наложение исключено.
     display.setColor(UIColor::primary_txt);
     display.setTextSize(1);
-    display.drawTextCentered(display.width() / 2, 32, _base_version);
+    display.drawTextCentered(display.width() / 2, 30, _version_line);
 
-    // Метка сборки: "SE" или "E22P".
-    if (_build_tag[0]) {
-      display.setColor(UIColor::secondary_txt);
-      display.setTextSize(1);
-      display.drawTextCentered(display.width() / 2, 42, _build_tag);
-    }
+    // Дата сборки — живая, её подставляет git_version.py перед сборкой.
+    display.setColor(UIColor::secondary_txt);
+    display.setTextSize(1);
+    display.drawTextCentered(display.width() / 2, 42, FIRMWARE_BUILD_DATE);
 
     return 1000;
   }
