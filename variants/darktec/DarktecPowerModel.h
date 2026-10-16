@@ -1,0 +1,330 @@
+/*
+ * DarktecPowerModel.h — модель питания DarkTec: SOC из напряжения и ETA.
+ *
+ * Считает две вещи, и обе — не по-линейному:
+ *
+ *   1. Процент заряда (SOC) из напряжения пакета по РЕАЛЬНОЙ кривой разряда
+ *      Li-ion, а не по прямой между пустым и полным. Кривая — в
+ *      DarktecPowerTables.h, снята с живой банки на токе 100 мА. В середине
+ *      диапазона она почти горизонтальна: 3-5 мВ на 1% SOC.
+ *
+ *   2. ETA — ИНТЕГРИРОВАНИЕМ по кривой, а не делением остатка на средний ток.
+ *      Ток ноды сам зависит от напряжения (25.7 мА при 4.2 В и 50 мА при 3.0 В
+ *      на 33S), поэтому «остаток / средний ток» систематически врёт.
+ *
+ * Принципиально: залитые мАч в расчёте НЕ участвуют. Нода может заряжаться
+ * от 55% или 70% — процент берётся из напряжения, остаток считается от него.
+ *
+ * Напряжение берётся ТОЛЬКО в покое: под нагрузкой 1.5 А клеммы просажены
+ * (внутреннее сопротивление + защита), а в полке кривой 3-5 мВ на 1% SOC,
+ * так что замер под передачей уводит процент на единицы.
+ */
+
+#pragma once
+
+#include <math.h>
+#include <stdint.h>
+
+#include <DarktecPowerTables.h>
+
+namespace darktec {
+
+// Индексы модулей — порядок обязан совпадать с таблицами в DarktecPowerTables.h.
+enum PowerModule : uint8_t {
+  MODULE_E22_900M33S  = 0,
+  MODULE_E22_900M30S  = 1,
+  MODULE_HT_RA62      = 2,
+  MODULE_E22P_868M30S = 3,
+  MODULE_COUNT        = 4
+};
+
+// Сколько держать тишину в эфире, прежде чем верить напряжению как напряжению
+// покоя. Короткая передача и хвост приёма (80 мс) сюда не попадают.
+static const uint32_t OCV_QUIET_MS = 3000;
+
+// Шаг интегрирования ETA по SOC.
+static const uint8_t ETA_SOC_STEP = 1;
+
+// Потолок ETA, минут (~4.5 месяца) — чтобы не гонять цикл впустую.
+static const uint32_t ETA_MINUTES_CAP = 200000UL;
+
+class PowerModel {
+public:
+  void setCapacityMah(float mah) {
+    if (mah < 100.0f) return;
+    _capacity_mah = mah;
+  }
+
+  void setModule(uint8_t module) {
+    _module = (module < MODULE_COUNT) ? module : MODULE_E22_900M33S;
+  }
+
+  void setTxPowerDbm(int8_t dbm) { _tx_dbm = dbm; }
+
+  // Экран горит — другой ток покоя, разница 6-13 мА постоянных.
+  void setDisplayOn(bool on) { _display_on = on; }
+
+  uint32_t getCapacityMah() const { return (uint32_t)(_capacity_mah + 0.5f); }
+
+  // --- SOC ------------------------------------------------------------------
+
+  // Периодический вызов: подаёт напряжение в модель. Замер под нагрузкой
+  // игнорируется, пока в эфире была активность недавно.
+  void update(uint16_t batt_mv, uint32_t now_ms, bool radio_active) {
+    if (radio_active) {
+      _last_active_ms = now_ms;
+      return;
+    }
+    if (_last_active_ms != 0 && (uint32_t)(now_ms - _last_active_ms) < OCV_QUIET_MS) {
+      return;
+    }
+    if (batt_mv < 1500) return;   // явный мусор в замере
+
+    _ocv_mv = batt_mv;
+    _soc = socFromVoltage(batt_mv);
+    _soc_valid = true;
+  }
+
+  bool hasSoc() const { return _soc_valid; }
+  float getSocPercent() const { return _soc; }
+  uint16_t getOcvMilliVolts() const { return _ocv_mv; }
+  uint32_t getRemainMah() const {
+    return (uint32_t)(_capacity_mah * _soc / 100.0f + 0.5f);
+  }
+
+  // Напряжение пакета, соответствующее текущему SOC (для диагностики).
+  uint16_t getSocVoltage() const { return voltageForSoc(_soc, vFullMv()); }
+
+  // --- ТОК ------------------------------------------------------------------
+
+  // Ток, который модель приписывает текущему состоянию, мА.
+  float currentNowMa(bool transmitting) const {
+    return transmitting ? txCurrentAt(_ocv_mv) : idleCurrentAt(_ocv_mv);
+  }
+
+  // Средний ток за оставшийся разряд, мА. Это то, что показывается как Iavg:
+  // не сглаженное мгновенное значение, а честное среднее по остатку.
+  float averageLoadMa() const {
+    uint32_t eta = etaMinutes();
+    float remain = (float)getRemainMah();
+    if (eta == 0 || remain <= 0.0f) return currentNowMa(false);
+    return remain / ((float)eta / 60.0f);
+  }
+
+  // --- ETA ------------------------------------------------------------------
+
+  uint32_t etaMinutes() const {
+    if (!_soc_valid || _soc <= 0.0f || _capacity_mah <= 0.0f) return 0;
+
+    const float tx_fraction = txDutyFraction();
+    float minutes = 0.0f;
+    float soc = _soc;
+
+    while (soc > 0.5f) {
+      float step = (soc < (float)ETA_SOC_STEP) ? soc : (float)ETA_SOC_STEP;
+      float soc_mid = soc - step * 0.5f;
+      uint16_t mv = voltageForSoc(soc_mid, vFullMv());
+
+      float i_idle = idleCurrentAt(mv);
+      float i_tx = txCurrentAt(mv);
+      float i_avg = i_idle + (i_tx - i_idle) * tx_fraction;
+      if (i_avg < 1.0f) i_avg = 1.0f;
+
+      minutes += (_capacity_mah * step / 100.0f) / i_avg * 60.0f;
+      soc -= step;
+
+      if (minutes > (float)ETA_MINUTES_CAP) return ETA_MINUTES_CAP;
+    }
+    return (uint32_t)(minutes + 0.5f);
+  }
+
+  // --- Наблюдаемая скважность передачи --------------------------------------
+
+  // Вызывается по факту передачи: сколько миллисекунд нода молотила в эфир.
+  void noteTxTime(uint32_t ms) { _tx_ms_in_window += ms; }
+
+  // Вызывается регулярно, чтобы окно наблюдения продвигалось.
+  void noteWindowTick(uint32_t ms) {
+    _window_ms += ms;
+    if (_window_ms >= TX_WINDOW_MS) {
+      float f = (float)_tx_ms_in_window / (float)_window_ms;
+      if (f > 0.5f) f = 0.5f;      // выше половины времени передачи не бывает
+      _tx_fraction = f;
+      _window_ms = 0;
+      _tx_ms_in_window = 0;
+    }
+  }
+
+  float txDutyFraction() const { return _tx_fraction; }
+
+private:
+  static const uint32_t TX_WINDOW_MS = 600000UL;   // 10 минут
+
+  float    _capacity_mah = 3000.0f;
+  float    _soc = 100.0f;
+  bool     _soc_valid = false;
+  uint16_t _ocv_mv = 0;
+  uint8_t  _module = MODULE_E22_900M33S;
+  int8_t   _tx_dbm = 22;
+  bool     _display_on = false;
+  uint32_t _last_active_ms = 0;
+
+  uint32_t _tx_ms_in_window = 0;
+  uint32_t _window_ms = 0;
+  float    _tx_fraction = 0.0f;
+
+  // --- окно напряжений по химии пакета --------------------------------------
+
+  static uint16_t vFullMv() {
+#if defined(BATTERY_CHEMISTRY) && BATTERY_CHEMISTRY == BATTERY_CHEM_LIFEPO4
+    return V_FULL_LIFEPO4_MV;
+#elif defined(BATTERY_CHEMISTRY) && BATTERY_CHEMISTRY == BATTERY_CHEM_LTO
+    return V_FULL_LTO_MV;
+#else
+    return V_FULL_LIION_MV;
+#endif
+  }
+
+  // --- кривая ---------------------------------------------------------------
+
+  // Напряжение для заданного SOC: форма кривой, растянутая на окно химии.
+  static uint16_t voltageForSoc(float soc, uint16_t v_full) {
+    if (soc >= 100.0f) return v_full;
+    if (soc <= 0.0f) return V_EMPTY_MV;
+
+    const int n = SOC_CURVE_POINTS;
+    float shape = (float)SOC_CURVE_SHAPE[n - 1].mv;
+
+    // Таблица идёт по убыванию SOC, то есть по возрастанию напряжения.
+    for (int i = 0; i < n - 1; i++) {
+      float s_hi = (float)SOC_CURVE_SHAPE[i].soc;
+      float s_lo = (float)SOC_CURVE_SHAPE[i + 1].soc;
+      if (soc <= s_hi && soc >= s_lo) {
+        float t = (soc - s_lo) / (s_hi - s_lo);
+        shape = (float)SOC_CURVE_SHAPE[i + 1].mv
+              + t * ((float)SOC_CURVE_SHAPE[i].mv - (float)SOC_CURVE_SHAPE[i + 1].mv);
+        break;
+      }
+    }
+
+    float frac = (shape - (float)SOC_CURVE_SHAPE_LO_MV)
+               / ((float)SOC_CURVE_SHAPE_HI_MV - (float)SOC_CURVE_SHAPE_LO_MV);
+    if (frac < 0.0f) frac = 0.0f;
+    if (frac > 1.0f) frac = 1.0f;
+    return (uint16_t)((float)V_EMPTY_MV + frac * (float)(v_full - V_EMPTY_MV) + 0.5f);
+  }
+
+  // Обратная задача: SOC по измеренному напряжению покоя.
+  static float socFromVoltage(uint16_t mv) {
+    const uint16_t v_full = vFullMv();
+    if (mv >= v_full) return 100.0f;
+    if (mv <= V_EMPTY_MV) return 0.0f;
+
+    float frac = (float)(mv - V_EMPTY_MV) / (float)(v_full - V_EMPTY_MV);
+    float shape = (float)SOC_CURVE_SHAPE_LO_MV
+                + frac * ((float)SOC_CURVE_SHAPE_HI_MV - (float)SOC_CURVE_SHAPE_LO_MV);
+
+    const int n = SOC_CURVE_POINTS;
+    for (int i = 0; i < n - 1; i++) {
+      float v_hi = (float)SOC_CURVE_SHAPE[i].mv;
+      float v_lo = (float)SOC_CURVE_SHAPE[i + 1].mv;
+      if (shape <= v_hi && shape >= v_lo) {
+        float t = (shape - v_lo) / (v_hi - v_lo);
+        return (float)SOC_CURVE_SHAPE[i + 1].soc
+             + t * ((float)SOC_CURVE_SHAPE[i].soc - (float)SOC_CURVE_SHAPE[i + 1].soc);
+      }
+    }
+    return (shape > (float)SOC_CURVE_SHAPE[0].mv) ? 100.0f : 0.0f;
+  }
+
+  // --- токи -----------------------------------------------------------------
+
+  // Таблица токов передатчика для выбранного модуля.
+  const uint16_t (*txTable() const)[POWER_DBM_COUNT] {
+    switch (_module) {
+      case MODULE_E22_900M30S:  return E22_900M30S_TX_MA;
+      case MODULE_HT_RA62:      return HT_RA62_TX_MA;
+      case MODULE_E22P_868M30S: return E22P_868M30S_TX_MA;
+      default:                  return E22_900M33S_TX_MA;
+    }
+  }
+
+  float idleCurrentAt(uint16_t mv) const {
+    const uint16_t *row;
+    switch (_module) {
+      case MODULE_E22_900M30S:
+        row = _display_on ? E22_900M30S_IDLE_ON_MA : E22_900M30S_IDLE_OFF_MA;
+        break;
+      case MODULE_HT_RA62:
+        row = _display_on ? HT_RA62_IDLE_ON_MA : HT_RA62_IDLE_OFF_MA;
+        break;
+      case MODULE_E22P_868M30S:
+        row = _display_on ? E22P_868M30S_IDLE_ON_MA : E22P_868M30S_IDLE_OFF_MA;
+        break;
+      default:
+        row = _display_on ? E22_900M33S_IDLE_ON_MA : E22_900M33S_IDLE_OFF_MA;
+        break;
+    }
+    return interpByIdle(mv, row);
+  }
+
+  float txCurrentAt(uint16_t mv) const {
+    const uint16_t (*tbl)[POWER_DBM_COUNT] = txTable();
+
+    // Столбцы идут по возрастанию мощности: POWER_DBM = { -9, 0, 5, 10, 22 }.
+    int c_lo = 0, c_hi = 0;
+    for (int k = 0; k < POWER_DBM_COUNT; k++) {
+      if ((int)_tx_dbm >= (int)POWER_DBM[k]) c_lo = k;
+      if ((int)_tx_dbm <= (int)POWER_DBM[k]) { c_hi = k; break; }
+    }
+
+    float a = interpByVoltage(tbl, mv, c_lo);
+    if (c_hi == c_lo) return a;
+    float b = interpByVoltage(tbl, mv, c_hi);
+
+    float p_lo = (float)POWER_DBM[c_lo];
+    float p_hi = (float)POWER_DBM[c_hi];
+    float t = ((float)_tx_dbm - p_lo) / (p_hi - p_lo);
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return a + t * (b - a);
+  }
+
+  // Интерполяция по напряжению внутри одного столбца мощности.
+  static float interpByVoltage(const uint16_t (*tbl)[POWER_DBM_COUNT], uint16_t mv, int col) {
+    if (mv >= MEASURED_MV[0]) return (float)tbl[0][col];
+    if (mv <= MEASURED_MV[MEASURED_MV_COUNT - 1]) {
+      return (float)tbl[MEASURED_MV_COUNT - 1][col];
+    }
+    for (int r = 0; r < MEASURED_MV_COUNT - 1; r++) {
+      uint16_t v_hi = MEASURED_MV[r];
+      uint16_t v_lo = MEASURED_MV[r + 1];
+      if (mv <= v_hi && mv >= v_lo) {
+        float t = (float)(v_hi - mv) / (float)(v_hi - v_lo);
+        float a = (float)tbl[r][col];
+        float b = (float)tbl[r + 1][col];
+        return a + t * (b - a);
+      }
+    }
+    return (float)tbl[0][col];
+  }
+
+  // Интерполяция по напряжению внутри массива токов покоя.
+  static float interpByIdle(uint16_t mv, const uint16_t *row) {
+    if (mv >= MEASURED_MV[0]) return (float)row[0];
+    if (mv <= MEASURED_MV[MEASURED_MV_COUNT - 1]) {
+      return (float)row[MEASURED_MV_COUNT - 1];
+    }
+    for (int r = 0; r < MEASURED_MV_COUNT - 1; r++) {
+      uint16_t v_hi = MEASURED_MV[r];
+      uint16_t v_lo = MEASURED_MV[r + 1];
+      if (mv <= v_hi && mv >= v_lo) {
+        float t = (float)(v_hi - mv) / (float)(v_hi - v_lo);
+        return (float)row[r] + t * ((float)row[r + 1] - (float)row[r]);
+      }
+    }
+    return (float)row[0];
+  }
+};
+
+}  // namespace darktec

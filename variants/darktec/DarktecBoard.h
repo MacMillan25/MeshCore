@@ -56,6 +56,7 @@
 #endif
 
 #include "DarktecAdcPower.h"
+#include "DarktecPowerModel.h"
 #include <Adafruit_INA3221.h>
 
 // INA3221: зарядка пакета на 2-м канале (Adafruit 0-based: CH1=0, CH2=1, CH3=2).
@@ -148,25 +149,23 @@ protected:
   uint32_t _tx_hold_until = 0;
   uint32_t _rx_hold_until = 0;
 
-  // Charge accounting, advanced by loop() once a second.
+  // Charge accounting, advanced by loop() once a second. Считает только
+  // «сколько залито за сессию» для страницы INA — в SOC и ETA НЕ участвует.
   float    _charge_mah = 0.0f;        // mAh poured into the pack this session
   bool     _charger_present = false;
   uint32_t _charge_last_ms = 0;
   uint32_t _charge_session_ms = 0;
+  uint32_t _full_hold_ms = 0;         // сколько ток заряда держится ниже порога
 
-  // Discharge accounting, advanced by the same tick while no charger is present.
+  // Состояние экрана и скважность передачи — входы модели питания.
   bool     _display_on = false;       // pushed in by the UI, picks the idle current
   uint32_t _tx_window_start = 0;
-  uint32_t _tx_ms_pending = 0;        // on-air time accrued since the last tick
-  float    _remain_mah = DARKTEC_BATT_CAPACITY_MAH;
-  bool     _remain_anchored = false;  // false until seeded from prefs or voltage
-  float    _capacity_mah = DARKTEC_BATT_CAPACITY_MAH;  // nameplate, set from Settings
-  uint32_t _full_hold_ms = 0;         // how long the charge current has stayed low
-  float    _avg_load_ma = DARKTEC_I_DISPLAY_ON_MA;     // smoothed draw, for the ETA
-  float    _tx_ma = DARKTEC_I_TX_MA;  // draw of the fitted module, set from Settings
+
+  // Модель питания: SOC из напряжения по реальной кривой и ETA интегрированием.
+  darktec::PowerModel _pm;
+  int8_t   _tx_dbm = 22;              // выставленная мощность: нужна CLI и модели
 
   void pollChargeSense();
-  void seedRemainFromVoltage();
   bool readInaShuntReady();
 #ifdef NRF52_POWER_MANAGEMENT
   void initiateShutdown(uint8_t reason) override;
@@ -190,43 +189,59 @@ public:
   bool isChargerPresent() const { return _charger_present; }
   uint32_t getChargeSessionSecs() const { return _charge_session_ms / 1000; }
 
-  // Discharge estimate for the battery test page.
-  uint32_t getRemainMah() const override { return (uint32_t)(_remain_mah + 0.5f); }
-  uint32_t getCapacityMah() const { return (uint32_t)(_capacity_mah + 0.5f); }
-  // Smoothed draw, used for the ETA: the instantaneous value swings between
-  // 28 mA and 1.5 A and would make the estimate jump about.
-  float getAverageLoadMa() const { return _avg_load_ma; }
-  // Current the model attributes to the present state, for eyeballing on screen.
-  float getStateLoadMa() const {
-    if (_txing) return _tx_ma;
-    return _display_on ? DARKTEC_I_DISPLAY_ON_MA : DARKTEC_I_DISPLAY_OFF_MA;
-  }
-  uint32_t getEtaMinutes() const;
+  // --- Модель питания: SOC, остаток, ETA -------------------------------------
 
-  void setDisplayOn(bool on) override { _display_on = on; }
+  // Остаток ёмкости выводится из ПРОЦЕНТА, который взят из напряжения.
+  // Залитые мАч сюда не входят: нода может заряжаться от 55% или 70%.
+  uint32_t getRemainMah() const override { return _pm.getRemainMah(); }
+  uint32_t getCapacityMah() const { return _pm.getCapacityMah(); }
 
-  void setTxCurrentMa(float ma) override {
-    if (ma > 0.0f) _tx_ma = ma;
+  // Сколько процентов показывает модель (по кривой разряда, не линейно).
+  uint8_t getSocPercent() const { return (uint8_t)(_pm.getSocPercent() + 0.5f); }
+  // Напряжение покоя, по которому посчитан процент.
+  uint16_t getOcvMilliVolts() const { return _pm.getOcvMilliVolts(); }
+
+  // Средний ток за оставшийся разряд. Это честное среднее по остатку,
+  // а не сглаженное мгновенное значение.
+  float getAverageLoadMa() const { return _pm.averageLoadMa(); }
+  // Ток, который модель приписывает текущему состоянию, для глаз на экране.
+  float getStateLoadMa() const { return _pm.currentNowMa(_txing); }
+  // Доля времени в эфире за последнее окно наблюдения (0..1).
+  float getTxDutyFraction() const { return _pm.txDutyFraction(); }
+
+  uint32_t getEtaMinutes() const { return _pm.etaMinutes(); }
+
+  // Модуль и мощность передатчика: то, чем модель различает железо.
+  // Вызывается и из UI компаньона, и из CLI — чтобы у всех ролей было одно.
+  void setPowerModel(uint8_t module, int8_t tx_dbm, float capacity_mah) {
+    _pm.setModule(module);
+    _pm.setTxPowerDbm(tx_dbm);
+    _pm.setCapacityMah(capacity_mah);
+  }
+  void setTxPowerDbm(int8_t tx_dbm) {
+    _pm.setTxPowerDbm(tx_dbm);
+    _tx_dbm = tx_dbm;
+  }
+  int8_t getTxPowerDbm() const { return _tx_dbm; }
+
+  // Отдельно модуль — UI меняет его из настроек, не трогая мощность и ёмкость.
+  void setModule(uint8_t module) { _pm.setModule(module); }
+
+  // Оставлено ради совместимости со старым интерфейсом MeshCore: значение,
+  // сохранённое предыдущей прошивкой, теперь не используется — процент
+  // берётся из напряжения.
+  void setRemainMah(uint32_t mah) override { (void)mah; }
+
+  void setDisplayOn(bool on) override {
+    _display_on = on;
+    _pm.setDisplayOn(on);
   }
 
-  void setRemainMah(uint32_t mah) override {
-    // Seeded from prefs after a reboot. A zero means nothing was stored, so the
-    // voltage fallback stays in charge instead.
-    if (mah == 0) return;
-    if ((float)mah > _capacity_mah) mah = (uint32_t)_capacity_mah;
-    _remain_mah = (float)mah;
-    _remain_anchored = true;
-  }
+  // Старый интерфейс: UI присылал ток модуля числом. Теперь модель берёт ток
+  // из таблиц по модулю и мощности, поэтому число игнорируем.
+  void setTxCurrentMa(float ma) override { (void)ma; }
 
-  void setBatteryCapacityMah(float mah) override {
-    if (mah < 100.0f || mah == _capacity_mah) return;
-    // Carry the state of charge across the change: only the scale moves, so a
-    // half-full pack stays half full when the nameplate figure is corrected.
-    if (_remain_anchored && _capacity_mah > 0.0f) {
-      _remain_mah = _remain_mah * (mah / _capacity_mah);
-    }
-    _capacity_mah = mah;
-  }
+  void setBatteryCapacityMah(float mah) override { _pm.setCapacityMah(mah); }
 
   bool isLoRaActivity() const {
     return _txing || _rxing
@@ -242,11 +257,11 @@ public:
   void onAfterTransmit() override {
     _txing = false;
     _tx_hold_until = millis() + 80;  // короткий хвост, чтобы вспышка была видна на OLED
-    // Actual on-air window, measured here rather than sampled by the tick. A
-    // packet can be shorter than one tick, and counting a whole tick would
-    // overstate a brief 1.5 A pulse many times over.
+    // Фактическое время в эфире, измеренное здесь, а не тиком: пакет бывает
+    // короче тика, и целый тик многократно завысил бы короткий импульс 1.5 А.
+    // Уходит в модель как скважность передачи — она нужна для ETA.
     uint32_t dur = millis() - _tx_window_start;
-    if (dur < 20000) _tx_ms_pending += dur;
+    if (dur < 20000) _pm.noteTxTime(dur);
   }
 
   #define BATTERY_SAMPLES 8

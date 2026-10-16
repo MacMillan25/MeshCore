@@ -86,8 +86,10 @@
   static const uint32_t BATT_CAPACITY_MAH[2] = { 3000, 4000 };
   // Draw while transmitting for the selectable modules, in mA. Measured on this
   // board: the 30S pulls about half of what the 33S does, the RA62 far less.
-  static const float RADIO_TX_MA[3] = { 1560.0f, 780.0f, 115.0f };
-  static const char* const RADIO_MODULE_LABEL[3] = { "33S", "30S", "RA62" };
+  // Порядок обязан совпадать с darktec::PowerModule и таблицами в
+  // variants/darktec/DarktecPowerTables.h — модель берёт ток по этому индексу.
+  static const char* const RADIO_MODULE_LABEL[4] = { "33S", "30S", "RA62", "E22P" };
+  static const int RADIO_MODULE_COUNT = 4;
 #else
   #define SETTINGS_BATT_ROWS   0
   #define SETTINGS_RADIO_ROWS  0
@@ -1583,9 +1585,10 @@ public:
           the_mesh.savePrefs();
         } else if (sel == SETTINGS_RADIO_IDX && _node_prefs) {
           int idx = _node_prefs->ui_radio_module_idx;
-          idx = fwd ? (idx + 1) % 3 : (idx + 2) % 3;
+          idx = fwd ? (idx + 1) % RADIO_MODULE_COUNT
+                    : (idx + RADIO_MODULE_COUNT - 1) % RADIO_MODULE_COUNT;
           _node_prefs->ui_radio_module_idx = idx;
-          board.setTxCurrentMa(RADIO_TX_MA[idx]);
+          board.setModule((uint8_t)idx);
           the_mesh.savePrefs();
 #endif
 #ifdef WITH_COMPANION_CLI
@@ -2083,17 +2086,13 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   if (_node_prefs != NULL) {
     setClockDimMode(_node_prefs->ui_clock_dim_mode);
 #if UI_PAGE_BATT
-    // Hand the board its nameplate capacity before the first tick, so the
-    // discharge model starts from the configured figure rather than the default.
-    board.setBatteryCapacityMah(
+    // Отдаём модели всё, чем она различает железо: установленный модуль,
+    // выставленную мощность и ёмкость пакета. Процент заряда модель считает
+    // сама из напряжения, поэтому остаток из prefs не восстанавливаем.
+    board.setPowerModel(
+        (uint8_t)constrain(_node_prefs->ui_radio_module_idx, 0, RADIO_MODULE_COUNT - 1),
+        _node_prefs->tx_power_dbm,
         (float)BATT_CAPACITY_MAH[constrain(_node_prefs->ui_batt_capacity_idx, 0, 1)]);
-    // And the module fitted, so the transmit pulses are priced correctly.
-    board.setTxCurrentMa(RADIO_TX_MA[constrain(_node_prefs->ui_radio_module_idx, 0, 2)]);
-    // Restore the charge estimate saved before the last reboot, so the page does
-    // not have to re-derive it from voltage alone.
-    if (_node_prefs->ui_remain_valid) {
-      board.setRemainMah(_node_prefs->ui_remain_mah);
-    }
 #endif
   }
 
