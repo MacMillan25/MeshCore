@@ -1,0 +1,273 @@
+name: Build Darktec Firmwares
+
+# Push to south_edition → versioned Darktec release (v{BASE}bN) + darktec-latest
+# BASE from MyMesh.h (Rogovogor major); N increments each push.
+#
+# Parallel layout:
+#   version  → compute VERSION/TAG + changelog (once; avoids bN races)
+#   build    → matrix by role (8 jobs × chem×protect = 8 builds each)
+#   release  → gather artifacts, zip bundle, publish (only if all shards OK)
+#
+# fail-fast: false — prefer seeing every failing role in one run rather than
+# cancelling siblings early. Set true to abort other shards on first failure.
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - south_edition
+    paths:
+      - "variants/darktec/**"
+      - "src/**"
+      - "include/**"
+      - "lib/**"
+      - "examples/companion_radio/**"
+      - "examples/simple_repeater/**"
+      - "examples/simple_room_server/**"
+      - "examples/simple_secure_chat/**"
+      - "examples/simple_sensor/**"
+      - "examples/kiss_modem/**"
+      - "platformio.ini"
+      - "boards/**"
+      - "bin/**"
+      - "build.sh"
+      - "scripts/build-darktec-matrix.sh"
+      - "scripts/darktec-version.sh"
+      - "scripts/darktec-changelog.sh"
+      - ".github/workflows/build-darktec-firmwares.yml"
+      - ".github/actions/setup-build-environment/**"
+
+concurrency:
+  group: darktec-firmware
+  cancel-in-progress: true
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      VERSION: ${{ steps.compute.outputs.VERSION }}
+      TAG: ${{ steps.compute.outputs.TAG }}
+      PREV_TAG: ${{ steps.compute.outputs.PREV_TAG }}
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compute Darktec version
+        id: compute
+        env:
+          FIRMWARE_REPO: beeline09/MeshCore
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: /usr/bin/env bash scripts/darktec-version.sh
+
+      - name: Build changelog
+        run: /usr/bin/env bash scripts/darktec-changelog.sh /tmp/darktec-changelog.md
+
+      - name: Upload changelog
+        uses: actions/upload-artifact@v7
+        with:
+          name: darktec-meta-${{ steps.compute.outputs.VERSION }}
+          path: /tmp/darktec-changelog.md
+
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      # false: all role shards finish so one run surfaces every failure.
+      fail-fast: false
+      matrix:
+        include:
+          - pio_env: Darktec_companion_radio_ble
+            role_slug: companion_radio_ble
+          - pio_env: Darktec_companion_radio_usb
+            role_slug: companion_radio_usb
+          - pio_env: Darktec_repeater
+            role_slug: repeater
+          - pio_env: Darktec_repeater_bridge_rs232_serial1
+            role_slug: repeater_bridge_rs232
+          - pio_env: Darktec_room_server
+            role_slug: room_server
+          - pio_env: Darktec_terminal_chat
+            role_slug: terminal_chat
+          - pio_env: Darktec_sensor
+            role_slug: sensor
+          - pio_env: Darktec_kiss_modem
+            role_slug: kiss_modem
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Build Darktec role matrix
+        env:
+          FIRMWARE_VERSION: ${{ needs.version.outputs.VERSION }}
+          DARKTEC_ROLE_SLUG: ${{ matrix.role_slug }}
+          DARKTEC_PIO_ENV: ${{ matrix.pio_env }}
+        run: /usr/bin/env bash scripts/build-darktec-matrix.sh
+
+      - name: Upload role artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: darktec-build-${{ matrix.role_slug }}-${{ needs.version.outputs.VERSION }}
+          path: |
+            out/Darktec_*_*s_*.uf2
+            out/Darktec_*_*s_*.zip
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+      TAG: ${{ needs.version.outputs.TAG }}
+    steps:
+      - name: Download role artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: darktec-build-*-${{ needs.version.outputs.VERSION }}
+          path: out
+          merge-multiple: true
+
+      - name: Download changelog
+        uses: actions/download-artifact@v7
+        with:
+          name: darktec-meta-${{ needs.version.outputs.VERSION }}
+          path: /tmp/darktec-meta
+
+      - name: Package zip of flasher UF2s
+        run: |
+          set -euo pipefail
+          ls -la out/
+          uf2_count="$(find out -maxdepth 1 -type f -name 'Darktec_*_*s_*.uf2' | wc -l | tr -d ' ')"
+          echo "Merged flasher UF2 count: ${uf2_count} (expected 64)"
+          if [ "${uf2_count}" -lt 64 ]; then
+            echo "ERROR: expected 64 flasher UF2s after merge, got ${uf2_count}"
+            exit 1
+          fi
+          cp -f /tmp/darktec-meta/darktec-changelog.md /tmp/darktec-changelog.md
+          cd out
+          zip -9 "Darktec_uf2_${VERSION}.zip" Darktec_*_*s_*.uf2
+          cp -f "Darktec_uf2_${VERSION}.zip" Darktec_uf2_latest.zip
+          unzip -l Darktec_uf2_latest.zip
+
+      - name: Publish versioned release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Darktec ${{ env.VERSION }}
+          body_path: /tmp/darktec-changelog.md
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: |
+            out/Darktec_*_*s_*.uf2
+            out/Darktec_*_*s_*.zip
+            out/Darktec_uf2_${{ env.VERSION }}.zip
+
+      - name: Update darktec-latest pointer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          files=(out/Darktec_*_*s_*.uf2 out/Darktec_*_*s_*.zip out/Darktec_uf2_latest.zip)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No latest assets to upload"
+            exit 1
+          fi
+
+          retry_gh() {
+            local max_attempts="$1"
+            shift
+            local attempt=1
+            local delay=15
+            local out rc
+            while true; do
+              set +e
+              out="$("$@" 2>&1)"
+              rc=$?
+              set -e
+              if [ $rc -eq 0 ]; then
+                printf '%s\n' "$out"
+                return 0
+              fi
+              printf '%s\n' "$out" >&2
+              if [ $attempt -ge $max_attempts ]; then
+                return $rc
+              fi
+              if [[ "$out" == *"secondary rate limit"* ]] || [[ "$out" == *"Secondary rate limit"* ]]; then
+                echo "Rate limited. Sleep ${delay}s before retry ${attempt}/${max_attempts}..." >&2
+                sleep "$delay"
+                delay=$((delay * 2))
+              else
+                echo "Command failed without rate-limit marker; retry ${attempt}/${max_attempts} in 5s..." >&2
+                sleep 5
+              fi
+              attempt=$((attempt + 1))
+            done
+          }
+
+          if ! gh release view darktec-latest -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create darktec-latest -R "${GITHUB_REPOSITORY}" \
+              --title "Darktec Firmware (latest → ${VERSION})" \
+              --notes-file /tmp/darktec-changelog.md \
+              --latest=false
+          fi
+
+          gh release edit darktec-latest -R "${GITHUB_REPOSITORY}" \
+            --title "Darktec Firmware (latest → ${VERSION})" \
+            --notes-file /tmp/darktec-changelog.md \
+            --latest
+
+          mapfile -t wanted_names < <(
+            for f in "${files[@]}"; do
+              basename "$f"
+            done | sort -u
+          )
+
+          mapfile -t existing_names < <(
+            gh release view darktec-latest -R "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name'
+          )
+
+          for asset in "${existing_names[@]}"; do
+            keep=0
+            for wanted in "${wanted_names[@]}"; do
+              if [ "$asset" = "$wanted" ]; then
+                keep=1
+                break
+              fi
+            done
+            if [ $keep -eq 0 ]; then
+              retry_gh 5 gh release delete-asset darktec-latest "$asset" -R "${GITHUB_REPOSITORY}" --yes
+            fi
+          done
+
+          for f in "${files[@]}"; do
+            retry_gh 5 gh release upload darktec-latest "$f" -R "${GITHUB_REPOSITORY}" --clobber
+            sleep 1
+          done
+
+      - name: Notify Pages site to sync manifest
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.PAGES_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "PAGES_DISPATCH_TOKEN not set — site uses GitHub API live"
+            exit 0
+          fi
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/beeline09/beeline09.github.io/dispatches \
+            -f event_type='meshcore-release' \
+            -f client_payload[tag]='${{ env.TAG }}' \
+            -f client_payload[version]='${{ env.VERSION }}' \
+            -f client_payload[sha]='${{ github.sha }}'
