@@ -148,14 +148,22 @@ void DarktecBoard::loop() {
   uint32_t dt = (_charge_last_ms == 0) ? 0 : (now - _charge_last_ms);
   _charge_last_ms = now;
 
-  // Напряжение покоя — в модель, и продвигаем окно наблюдения за эфиром.
-  _pm.update(getBattMilliVolts(), now, isLoRaActivity());
-  _pm.noteWindowTick(DARKTEC_CHARGE_TICK_MS);
-  (void)getBattMilliVolts();   // защёлкнуть свежий замер для телеметрии
-
   if (!readInaShuntReady()) {
     return;
   }
+
+  // Ток пакета нужен модели: по нему компенсируется падение на внутреннем
+  // сопротивлении, иначе во время заряда клеммы дают ложные 100%.
+  // Знак у INA3221: «+» разряд, «−» заряд.
+  float batt_ma = 0.0f;
+  {
+    float a = _ina.getCurrentAmps(DARKTEC_INA_BATT_CH);
+    if (!isnan(a)) batt_ma = a * 1000.0f;
+  }
+
+  // Напряжение, ток и тишина в эфире — в модель.
+  _pm.update(getBattMilliVolts(), batt_ma, now, isLoRaActivity());
+  _pm.noteWindowTick(DARKTEC_CHARGE_TICK_MS);
 
   float chrg_v = _ina.getBusVoltage(DARKTEC_INA_CHARGE_CH);
   if (isnan(chrg_v)) {

@@ -396,19 +396,30 @@ class HomeScreen : public UIScreen {
 #endif
 
 
+  // Процент берётся у платы (модель: кривая разряда + компенсация падения
+  // под током), а не из линейного пересчёта напряжения. Линейный пересчёт на
+  // литиевой полке врёт: 3.6 В — это 50%, а не 60%, и под зарядом 2 А он
+  // показывает 100% при реальных 55%.
+  static const int BOLT_W = 4;   // ширина молнии заряда в пикселях
+  static const int BOLT_H = 7;   // высота молнии заряда в пикселях
+
   void renderBatteryIndicator(DisplayDriver& display, uint16_t batteryMilliVolts) {
-    // Convert millivolts to percentage
+    (void)batteryMilliVolts;
+    int batteryPercentage = board.getSocPercent();
+    if (!board.powerModelReady()) {
+      // Модель ещё не получила ни одного пригодного замера — падаем на грубую
+      // линейную оценку, чтобы значок не мигал пустым на старте.
 #ifndef BATT_MIN_MILLIVOLTS
   #define BATT_MIN_MILLIVOLTS 3000
 #endif
 #ifndef BATT_MAX_MILLIVOLTS
   #define BATT_MAX_MILLIVOLTS 4200
 #endif
-    const int minMilliVolts = BATT_MIN_MILLIVOLTS;
-    const int maxMilliVolts = BATT_MAX_MILLIVOLTS;
-    int batteryPercentage = ((batteryMilliVolts - minMilliVolts) * 100) / (maxMilliVolts - minMilliVolts);
-    if (batteryPercentage < 0) batteryPercentage = 0; // Clamp to 0%
-    if (batteryPercentage > 100) batteryPercentage = 100; // Clamp to 100%
+      batteryPercentage = ((int)batteryMilliVolts - BATT_MIN_MILLIVOLTS) * 100
+                        / (BATT_MAX_MILLIVOLTS - BATT_MIN_MILLIVOLTS);
+    }
+    if (batteryPercentage < 0) batteryPercentage = 0;
+    if (batteryPercentage > 100) batteryPercentage = 100;
 
     // battery icon
     int iconWidth = 24;
@@ -427,13 +438,34 @@ class HomeScreen : public UIScreen {
     int fillWidth = (batteryPercentage * (iconWidth - 4)) / 100;
     display.fillRect(iconX + 2, iconY + 2, fillWidth, iconHeight - 4);
 
-    // show muted icon if buzzer is muted
+    int rightOfIcon = iconX;
+    const bool charging = board.isCharging();
 #ifdef PIN_BUZZER
+    // show muted icon if buzzer is muted; под зарядом уступаем место молнии
     if (_task->isBuzzerQuiet()) {
       display.setColor(UIColor::warning_txt);
-      display.drawXbm(iconX - 9, iconY + 1, muted_icon, 8, 8);
+      int mx = charging ? (iconX - 9 - BOLT_W - 2) : (iconX - 9);
+      display.drawXbm(mx, iconY + 1, muted_icon, 8, 8);
+      rightOfIcon = mx;
     }
 #endif
+    // Пока идёт заряд — рисуем молнию слева от значка, как в телефонах.
+    // Драйвер умеет только прямоугольники и XBM, поэтому молния собрана
+    // из мелких заливок: три ступеньки зигзага.
+    if (charging) {
+      display.setColor(UIColor::warning_txt);
+      int bx = iconX - BOLT_W - 1;
+#ifdef PIN_BUZZER
+      if (_task->isBuzzerQuiet()) bx -= 9;   // уступаем место значку беззвучки
+#endif
+      int by = iconY + (iconHeight - BOLT_H) / 2;
+      display.fillRect(bx + 2, by,     2, 3);   // верхняя ступенька
+      display.fillRect(bx + 1, by + 2, 2, 3);   // середина
+      display.fillRect(bx,     by + 4, 2, 3);   // нижняя ступенька
+      rightOfIcon = bx;
+    }
+    (void)rightOfIcon;
+    (void)iconWidth;
   }
 
   CayenneLPP sensors_lpp;
@@ -1141,8 +1173,12 @@ public:
                (unsigned long)(eta_min / 60), (unsigned long)(eta_min % 60));
       display.setCursor(0, by); display.print(bbuf); by += line_h;
 
-      snprintf(bbuf, sizeof(bbuf), "Iavg   %umA",
-               (unsigned)(board.getAverageLoadMa() + 0.5f));
+      // Iavg намеренно НЕ выводим: это средний ток по всему остатку разряда,
+      // и на полной банке он почти не меняется (43 мА), из-за чего выглядел
+      // застывшим. Показываем то, что нода ест ПРЯМО СЕЙЧАС, по состоянию:
+      // экран и режим радио учтены, передача — в момент передачи.
+      snprintf(bbuf, sizeof(bbuf), "Inow   %umA",
+               (unsigned)(board.getStateLoadMa() + 0.5f));
       display.setCursor(0, by); display.print(bbuf);
 
       return UI_INA_REFRESH_MS;

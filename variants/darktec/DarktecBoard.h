@@ -198,6 +198,11 @@ public:
 
   // Сколько процентов показывает модель (по кривой разряда, не линейно).
   uint8_t getSocPercent() const { return (uint8_t)(_pm.getSocPercent() + 0.5f); }
+  // false, пока модель не получила ни одного пригодного замера напряжения:
+  // UI в этом случае показывает грубую линейную оценку, а не пустой значок.
+  bool powerModelReady() const { return _pm.hasSoc(); }
+  // Идёт ли заряд прямо сейчас — по току пакета, а не по напряжению.
+  bool isPowerModelCharging() const { return _pm.isCharging(); }
   // Напряжение покоя, по которому посчитан процент.
   uint16_t getOcvMilliVolts() const { return _pm.getOcvMilliVolts(); }
 

@@ -48,6 +48,9 @@ static const uint8_t ETA_SOC_STEP = 1;
 // Потолок ETA, минут (~4.5 месяца) — чтобы не гонять цикл впустую.
 static const uint32_t ETA_MINUTES_CAP = 200000UL;
 
+// Ток пакета, ниже которого заряд не считаем: INA3221 шумит на десятки мА.
+static const float CHARGE_DETECT_MA = 20.0f;
+
 class PowerModel {
 public:
   void setCapacityMah(float mah) {
@@ -70,20 +73,47 @@ public:
 
   // Периодический вызов: подаёт напряжение в модель. Замер под нагрузкой
   // игнорируется, пока в эфире была активность недавно.
-  void update(uint16_t batt_mv, uint32_t now_ms, bool radio_active) {
+  // batt_current_ma — ток пакета от INA3221, знак БЕРЁМ КАК ЕСТЬ.
+  //
+  // Знак у разных плат бывает разным, а угадывать его нельзя: ошибка знаком
+  // переворачивает компенсацию и уводит процент в противоположную сторону.
+  // Поэтому модель определяет полярность сама, один раз, по простому признаку:
+  // измеренное напряжение ВЫШЕ напряжения-по-кривой означает, что пакет
+  // заряжают, а не разряжают. Решение запоминается в _invert_current.
+  void update(uint16_t batt_mv, float batt_current_ma, uint32_t now_ms, bool radio_active) {
     if (radio_active) {
       _last_active_ms = now_ms;
       return;
     }
-    if (_last_active_ms != 0 && (uint32_t)(now_ms - _last_active_ms) < OCV_QUIET_MS) {
-      return;
+
+    bool charging = signedChargeCurrentMa(batt_current_ma) > CHARGE_DETECT_MA;
+
+    // Во время заряда замер берётся сразу, не дожидаясь тишины: ток заряда и
+    // так перебивает любую передачу, а компенсация делает замер пригодным.
+    // В покое и на разряде ждём, пока эфир утихнет: под передачей 1.5 А
+    // клеммы просажены, а в полке кривой 3-5 мВ на 1% SOC.
+    if (!charging) {
+      if (_last_active_ms != 0 && (uint32_t)(now_ms - _last_active_ms) < OCV_QUIET_MS) {
+        return;
+      }
     }
     if (batt_mv < 1500) return;   // явный мусор в замере
 
-    _ocv_mv = batt_mv;
-    _soc = socFromVoltage(batt_mv);
+    learnCurrentPolarity(batt_mv, batt_current_ma);
+
+    _charging = charging;
+    _batt_current_ma = batt_current_ma;
+    _ocv_mv = ocvFromTerminalPolar(batt_mv, batt_current_ma);
+    _soc = socFromVoltage(_ocv_mv);
     _soc_valid = true;
   }
+
+  bool isCharging() const { return _charging; }
+  float getBattCurrentMa() const { return _batt_current_ma; }
+
+  // Найдена ли полярность шунта (для диагностики).
+  bool isCurrentPolarityKnown() const { return _polarity_known; }
+  bool isCurrentPolarityInverted() const { return _invert_current; }
 
   bool hasSoc() const { return _soc_valid; }
   float getSocPercent() const { return _soc; }
@@ -163,6 +193,10 @@ private:
   float    _capacity_mah = 3000.0f;
   float    _soc = 100.0f;
   bool     _soc_valid = false;
+  bool     _charging = false;
+  bool     _invert_current = false;
+  bool     _polarity_known = false;
+  float    _batt_current_ma = 0.0f;
   uint16_t _ocv_mv = 0;
   uint8_t  _module = MODULE_E22_900M33S;
   int8_t   _tx_dbm = 22;
@@ -183,6 +217,46 @@ private:
 #else
     return V_FULL_LIION_MV;
 #endif
+  }
+
+  // --- компенсация падения на внутреннем сопротивлении ----------------------
+
+  // Клеммы под током показывают не напряжение банки: 2 А заряда поднимают их
+  // на ~0.5 В, и без компенсации нода радостно показывает 100% при 50%
+  // реальных. Отсюда V_разомкн = V_изм - I*R, где «+» разряд, «−» заряд.
+  // R и коэффициент подобраны по двум реальным кривым (см. генератор).
+  static uint16_t ocvFromTerminal(uint16_t batt_mv, float current_ma) {
+    float i_a = current_ma / 1000.0f;
+    float v = (float)batt_mv - i_a * IR_R_OHM * IR_K;
+    if (v < 0.0f) v = 0.0f;
+    return (uint16_t)(v + 0.5f);
+  }
+
+  // Ток заряда в мА с «правильным» знаком: >0 значит льют в пакет.
+  float signedChargeCurrentMa(float raw_ma) const {
+    return _invert_current ? -raw_ma : raw_ma;
+  }
+
+  // То же приведение, но сразу для напряжения банки.
+  uint16_t ocvFromTerminalPolar(uint16_t batt_mv, float raw_ma) const {
+    return ocvFromTerminal(batt_mv, signedChargeCurrentMa(raw_ma));
+  }
+
+  // Один раз выясняем, какой знак у тока на этой плате.
+  //
+  // Считаем SOC двумя способами — как есть и с обратным током. Правильный
+  // тот, при котором компенсация уводит напряжение банки ВНИЗ, когда ток
+  // льют в пакет. Проще: если при обратном токе напряжение банки выходит
+  // выше измеренного, значит raw_ma — это ток заряда, и знак переворачиваем.
+  void learnCurrentPolarity(uint16_t batt_mv, float raw_ma) {
+    if (_polarity_known) return;
+    if (fabsf(raw_ma) < CHARGE_DETECT_MA) return;   // слишком мал, не решаем
+
+    float soc_raw = socFromVoltage(batt_mv);
+    float soc_inv = socFromVoltage(ocvFromTerminal(batt_mv, -raw_ma));
+
+    _invert_current = (soc_inv > soc_raw);
+    _polarity_known = true;
   }
 
   // --- кривая ---------------------------------------------------------------

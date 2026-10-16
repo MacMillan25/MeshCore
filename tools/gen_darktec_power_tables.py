@@ -35,9 +35,20 @@ OUT = ROOT / "variants" / "darktec" / "DarktecPowerTables.h"
 # --------------------------------------------------------------------------
 # Входные данные
 
+# Кривая разряда (100 мА) и кривая заряда (2 А) с одного и того же прогона iMax.
 CURVE_CSV = Path(
-    r"C:\Users\DARK4\Desktop\imaxcharger-main\imax_app\logs\LiION_4000_0.1A_thin.csv"
+    r"C:\Users\DARK4\Desktop\imaxcharger-main\imax_app\logs\LiION_4000_0.1A_discharge_thin.csv"
 )
+CHARGE_CSV = Path(
+    r"C:\Users\DARK4\Desktop\imaxcharger-main\imax_app\logs\LiION_4000_0.1A_charge_thin.csv"
+)
+
+# Компенсация падения напряжения на внутреннем сопротивлении при заряде.
+# R получено сравнением зарядной и разрядной кривых при одинаковом SOC
+# (среднее 0.2448 Ом), коэффициент 1.05 подобран так, чтобы ошибка SOC
+# по всей зарядной кривой была минимальной: средняя +0.7%, разброс ±4%.
+IR_R_OHM = 0.2448
+IR_K = 1.05
 
 # Опорные напряжения и точки кривой
 SOC_STEP = 5                       # шаг таблицы кривой, %
@@ -145,6 +156,35 @@ def build_soc_table(pts):
     return out
 
 
+def read_charge_curve(path: Path, step_pct=5):
+    """Зарядная кривая -> [(SOC%, напряжение при ~2 А)].
+
+    В CSV ёмкость набегает от 0 до полной, то есть SOC = залито / всего.
+    """
+    pts = []
+    with path.open(encoding="utf-8", errors="replace") as f:
+        for row in csv.DictReader(f):
+            try:
+                v = float(row["voltage_V"])
+                c = float(row["capacity_mAh"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            pts.append((v, c))
+    if not pts:
+        raise SystemExit(f"в {path} не найдено строк для зарядной кривой")
+    pts.sort(key=lambda x: x[1])
+    total = pts[-1][1] - pts[0][1]
+    if total <= 0:
+        raise SystemExit("в зарядной кривой нулевая залитая ёмкость")
+
+    out = []
+    for soc in range(0, 101, step_pct):
+        target = total * soc / 100.0
+        v = min(pts, key=lambda x: abs((x[1] - pts[0][1]) - target))[0]
+        out.append((soc, int(round(v * 1000.0))))
+    return out
+
+
 def soc_to_voltage(table, soc, v_empty, v_full):
     """Напряжение на заданном SOC: форма кривой, растянутая на окно химии.
 
@@ -173,6 +213,7 @@ def soc_to_voltage(table, soc, v_empty, v_full):
 def main():
     pts = read_curve(CURVE_CSV)
     curve = build_soc_table(pts)
+    charge = read_charge_curve(CHARGE_CSV)
     shape_hi, shape_lo = curve[0][1], curve[-1][1]
 
     # --- проверка монотонности: SOC вверх -> напряжение вверх
@@ -206,6 +247,20 @@ def main():
     L.append(f"static const uint16_t SOC_CURVE_SHAPE_HI_MV = {shape_hi};")
     L.append(f"static const uint16_t SOC_CURVE_SHAPE_LO_MV = {shape_lo};")
     L.append(f"static const int      SOC_CURVE_POINTS      = {len(curve)};")
+    L.append("")
+    L.append("// --- Заряд: напряжение при токе около 2 А, по SOC ---")
+    L.append("// Снято с той же банки, что и разряд. Нужно, чтобы во время заряда")
+    L.append("// не показывать 100% только потому, что клеммы поднялись до 4.2 В.")
+    L.append("static const SocPoint CHARGE_CURVE_2A[] = {")
+    for soc, mv in charge:
+        L.append(f"  {{ {soc:3d}, {mv:4d} }},   // {mv/1000.0:.3f} В")
+    L.append("};")
+    L.append(f"static const int CHARGE_CURVE_POINTS = {len(charge)};")
+    L.append("")
+    L.append("// Компенсация падения на внутреннем сопротивлении: V_разомкн = V_изм - I*R.")
+    L.append("// R измерено сравнением зарядной и разрядной кривых при одинаковом SOC.")
+    L.append(f"static const float IR_R_OHM = {IR_R_OHM}f;")
+    L.append(f"static const float IR_K     = {IR_K}f;")
     L.append("")
     L.append("// Низ окна: порог отключения ноды. Один для всех химий.")
     L.append(f"static const uint16_t V_EMPTY_MV        = {V_EMPTY_MV};")
@@ -250,6 +305,8 @@ def main():
     print(f"  точек кривой: {len(curve)}  ({curve[0][1]} мВ .. {curve[-1][1]} мВ)")
     print(f"  модулей: {len(MODULE_ORDER)}, мощностей: {len(P_MEASURED)}, "
           f"напряжений: {len(V_MEASURED)}")
+    print(f"  зарядная кривая (2 А): {len(charge)} точек, "
+          f"{charge[0][1]} .. {charge[-1][1]} мВ")
     print()
     print("  проверка кривой (Li-ion 1S, окно 3000..4200 мВ):")
     for soc in (100, 80, 60, 50, 40, 30, 20, 10, 5, 0):
