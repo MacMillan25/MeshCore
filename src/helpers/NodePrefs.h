@@ -108,6 +108,7 @@ public:
   uint32_t ui_remain_mah = 0;        // discharge estimate carried across reboots
   uint8_t  ui_remain_valid = 0;      // 1 once ui_remain_mah holds a real reading
   uint8_t  ui_radio_module_idx = 0;  // TX draw of the fitted module: 0=33S, 1=30S, 2=RA62
+  uint8_t  ui_auto_off_idx = 0;      // сколько экран горит: 0=15s, 1=30s, 2=1m, 3=5m, 4=1h
 
 private:
   class RadioPrefs : public ConfigSerializer {
@@ -248,6 +249,7 @@ private:
       def("remain_mah", _parent->ui_remain_mah);
       def("remain_ok", _parent->ui_remain_valid);
       def("radio_mod", _parent->ui_radio_module_idx);
+      def("auto_off", _parent->ui_auto_off_idx);
     }
   public:
     UIPrefs(NodePrefs* parent) : _parent(parent) { }

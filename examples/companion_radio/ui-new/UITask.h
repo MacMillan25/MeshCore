@@ -33,6 +33,17 @@ class UITask : public AbstractUITask {
 #endif
   unsigned long _next_refresh, _auto_off;
   NodePrefs* _node_prefs;
+
+public:
+  // Сколько экран горит после последней активности. Значение выбирается в
+  // настройках (строка "Screen on"); без prefs откатываемся на AUTO_OFF_MILLIS.
+  uint32_t getAutoOffMillis() const;
+
+  // Продлить время горения экрана от текущего момента. Экраны зовут это
+  // сами: _auto_off — приватное поле задачи, снаружи его не видно.
+  void extendAutoOff();
+
+private:
   int  _clock_dim_mode  = 0;   // 0=AOF (auto-off), 1=USB (no-dim on USB), 2=AON (no-dim on clock page)
   char _alert[80];
   unsigned long _alert_expiry;

@@ -10,6 +10,20 @@
 #ifndef AUTO_OFF_MILLIS
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
 #endif
+
+// Сколько экран остаётся включённым после последней активности. Выбирается в
+// настройках строкой "Screen on"; AUTO_OFF_MILLIS остаётся запасным вариантом
+// на случай, если настройки недоступны.
+static const uint32_t AUTO_OFF_MS[5] = {
+  15000UL, 30000UL, 60000UL, 300000UL, 3600000UL
+};
+static const char* const AUTO_OFF_LABEL[5] = {
+  "15s", "30s", "1m", "5m", "1h"
+};
+
+// Сколько висит экран входящего сообщения. Ровно столько и не больше:
+// раньше он оставался до следующего действия пользователя.
+static const uint32_t MESSAGE_PREVIEW_MILLIS = 10000UL;
 #define BOOT_SCREEN_MILLIS   3000   // 3 seconds
 
 #ifdef PIN_STATUS_LED
@@ -154,8 +168,12 @@ static void formatDuration(char* buf, size_t len, uint32_t secs) {
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
-  char _version_info[12];   // e.g. "v1.14.1", plus any FIRMWARE_VERSION_SUFFIX
-  char _commit_info[12];    // e.g. "#abc1234" or "" if no GIT_COMMIT
+  // Строки заставки держим раздельно: родительская версия, метка сборки и
+  // хеш коммита. Раньше версия с меткой и хеш печатались на 35 и 41 — при
+  // высоте строки 8 пикселей они налезали друг на друга.
+  char _base_version[12];   // "v1.17.1"
+  char _build_tag[8];       // "SE" / "E22P", пусто если метки нет
+  char _commit_info[12];    // "#abc1234" или пусто
 
 public:
   SplashScreen(UITask* task) : _task(task) {
@@ -164,25 +182,18 @@ public:
 
     // version part: "v1.14.1"
     int len = dash ? dash - ver : strlen(ver);
-    if (len >= (int)sizeof(_version_info)) len = sizeof(_version_info) - 1;
-    memcpy(_version_info, ver, len);
-    _version_info[len] = 0;
+    if (len >= (int)sizeof(_base_version)) len = sizeof(_base_version) - 1;
+    memcpy(_base_version, ver, len);
+    _base_version[len] = 0;
 
     // Append the marker, separated by a space. The separator is added here
     // rather than carried in the flag: a space inside a -D value splits the
     // compiler command line, so FIRMWARE_VERSION_SUFFIX stays a bare word.
     const char* suffix = FIRMWARE_VERSION_SUFFIX;
     int suflen = (int)strlen(suffix);
-    if (suflen > 0 && len < (int)sizeof(_version_info) - 1) {
-      _version_info[len++] = ' ';
-    }
-    if (len + suflen > (int)sizeof(_version_info) - 1)
-      suflen = (int)sizeof(_version_info) - 1 - len;
-    if (suflen < 0) suflen = 0;
-    if (suflen > 0) {
-      memcpy(_version_info + len, suffix, suflen);
-    }
-    _version_info[len + suflen] = 0;
+    if (suflen > (int)sizeof(_build_tag) - 1) suflen = (int)sizeof(_build_tag) - 1;
+    if (suflen > 0) memcpy(_build_tag, suffix, suflen);
+    _build_tag[suflen] = 0;
 
     // commit part: "#abc1234" (from the part after '-')
     if (dash) {
@@ -202,27 +213,23 @@ public:
     int logoWidth = 128;
     display.drawXbm((display.width() - logoWidth) / 2, 3, meshcore_logo, logoWidth, 13);
 
-    // meshcore website
-    const char* website = "https://meshcore.io";
+    // Наша марка вместо ссылки на meshcore.io.
     display.setColor(UIColor::primary_txt);
     display.setTextSize(1);
-    uint16_t websiteWidth = display.getTextWidth(website);
-    display.setCursor((display.width() - websiteWidth) / 2, 22);
-    display.print(website);
+    display.drawTextCentered(display.width() / 2, 20, "Dark Electronics");
 
-    // version info
+    // Родительская версия прошивки: "v1.17.1" без хвоста сборки и без
+    // хеша коммита — он тут только мешал и налезал на строку ниже.
     display.setColor(UIColor::primary_txt);
     display.setTextSize(1);
-    display.drawTextCentered(display.width()/2, 35, _version_info);
+    display.drawTextCentered(display.width() / 2, 32, _base_version);
 
-    // commit hash (small, between version and date)
-    display.setColor(UIColor::secondary_txt);
-    display.setTextSize(1);
-    if (_commit_info[0]) {
-      display.drawTextCentered(display.width()/2, 41, _commit_info);
+    // Метка сборки: "SE" или "E22P".
+    if (_build_tag[0]) {
+      display.setColor(UIColor::secondary_txt);
+      display.setTextSize(1);
+      display.drawTextCentered(display.width() / 2, 42, _build_tag);
     }
-
-    display.drawTextCentered(display.width()/2, 51, FIRMWARE_BUILD_DATE);
 
     return 1000;
   }
@@ -339,11 +346,12 @@ class HomeScreen : public UIScreen {
   static const int SETTINGS_RADIO_IDX       = 13 + SETTINGS_NOISE_ROWS;
 #endif
   static const int SETTINGS_ROT_IDX         = 12 + SETTINGS_EXTRA_ROWS;
-  static const int SETTINGS_UNREAD_IDX      = 13 + SETTINGS_EXTRA_ROWS;
-  static const int SETTINGS_LOG_IDX         = 14 + SETTINGS_EXTRA_ROWS;
-  static const int SETTINGS_BACK_IDX        = 15 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_DISP_IDX        = 13 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_UNREAD_IDX      = 14 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_LOG_IDX         = 15 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_BACK_IDX        = 16 + SETTINGS_EXTRA_ROWS;
 #elif defined(WITH_COMPANION_CLI)
-  static const int SETTINGS_N               = 15 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_N               = 16 + SETTINGS_EXTRA_ROWS;
   static const int SETTINGS_PM_IDX          = 3;
   static const int SETTINGS_DIM_IDX         = 4;
   static const int SETTINGS_C2L_CH_IDX      = 5;
@@ -360,11 +368,12 @@ class HomeScreen : public UIScreen {
   static const int SETTINGS_RADIO_IDX       = 12 + SETTINGS_NOISE_ROWS;
 #endif
   static const int SETTINGS_ROT_IDX         = 11 + SETTINGS_EXTRA_ROWS;
-  static const int SETTINGS_UNREAD_IDX      = 12 + SETTINGS_EXTRA_ROWS;
-  static const int SETTINGS_LOG_IDX         = 13 + SETTINGS_EXTRA_ROWS;
-  static const int SETTINGS_BACK_IDX        = 14 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_DISP_IDX        = 12 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_UNREAD_IDX      = 13 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_LOG_IDX         = 14 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_BACK_IDX        = 15 + SETTINGS_EXTRA_ROWS;
 #else
-  static const int SETTINGS_N               = 10 + SETTINGS_EXTRA_ROWS;
+  static const int SETTINGS_N               = 11 + SETTINGS_EXTRA_ROWS;
   static const int SETTINGS_PM_IDX          = 0;
   static const int SETTINGS_DIM_IDX         = 1;
   static const int SETTINGS_MCOTXT_IDX      = 2;
@@ -1380,6 +1389,7 @@ public:
           else if (i == SETTINGS_RADIO_IDX)    lbl = "Radio Mod";
 #endif
           else if (i == SETTINGS_ROT_IDX)      lbl = "Rotation";
+          else if (i == SETTINGS_DISP_IDX)     lbl = "Screen on";
           else if (i == SETTINGS_UNREAD_IDX)  lbl = "Max Unread";
           else if (i == SETTINGS_LOG_IDX)     lbl = "Max Log";
           display.print(lbl);
@@ -1445,6 +1455,9 @@ public:
             } else if (i == SETTINGS_ROT_IDX && _node_prefs) {
               static const char* rot_vals[4] = { "0", "90", "180", "270" };
               snprintf(val, sizeof(val), "%s deg", rot_vals[constrain(_node_prefs->ui_display_rotation, 0, 3)]);
+            } else if (i == SETTINGS_DISP_IDX && _node_prefs) {
+              snprintf(val, sizeof(val), "%s",
+                       AUTO_OFF_LABEL[constrain(_node_prefs->ui_auto_off_idx, 0, 4)]);
             } else if (i == SETTINGS_UNREAD_IDX && _node_prefs) {
               static const int unread_vals[3] = { 16, 32, 64 };
               snprintf(val, sizeof(val), "%d", unread_vals[constrain(_node_prefs->ui_max_unread_idx, 0, 2)]);
@@ -1649,6 +1662,13 @@ public:
             WiFi.scanNetworks(true);  // async
           }
 #endif
+        } else if (sel == SETTINGS_DISP_IDX && _node_prefs) {
+          // Сколько экран горит после последней активности.
+          int idx = _node_prefs->ui_auto_off_idx;
+          idx = fwd ? (idx + 1) % 5 : (idx + 4) % 5;
+          _node_prefs->ui_auto_off_idx = idx;
+          _task->extendAutoOff();
+          the_mesh.savePrefs();
         } else if (sel == SETTINGS_ROT_IDX && _node_prefs) {
           int r = _node_prefs->ui_display_rotation;
           r = fwd ? (r + 1) % 4 : (r + 3) % 4;
@@ -1800,6 +1820,11 @@ public:
   bool _in_history  = false;
   int  _hist_cursor = 0;
 
+  // Когда экран входящего сообщения закрывается сам. 0 = не закрывать:
+  // в режиме истории пользователь листает архив и выйдет сам.
+  unsigned long _dismiss_at = 0;
+  bool _on_screen = false;   // экран сейчас на виду (см. onShown/onHidden)
+
   int _max_unread = 32;  // runtime cap, changed via setMaxSizes()
   int _max_log    = 32;
 
@@ -1825,6 +1850,26 @@ private:
   }
 
 public:
+  // Взвести автоскрытие: экран закроется сам через ms миллисекунд.
+  void armAutoDismiss(uint32_t ms) { _dismiss_at = millis() + ms; }
+
+  bool isInHistory() const { return _in_history; }
+
+  // Закрываемся по таймеру. Если пользователь ушёл в историю или сам сменил
+  // экран — не трогаем ничего.
+  // Пока экран на виду — взводим флаг. Любая навигация его сбрасывает
+  // (см. handleKey), поэтому уход с экрана отменяет автоскрытие.
+  void onShown() { _on_screen = true; }
+  void onHidden() { _on_screen = false; _dismiss_at = 0; }
+  bool isOnScreenNow() const { return _on_screen; }
+
+  void poll() override {
+    if (_dismiss_at == 0 || _in_history || !_on_screen) return;
+    if ((long)(millis() - _dismiss_at) < 0) return;
+    _dismiss_at = 0;
+    _task->gotoHomeScreen();
+  }
+
   void addPreview(uint8_t path_len, const char* from_name, const char* msg, bool is_pm) {
     MsgEntry entry = {};
     auto p = &entry;
@@ -1842,7 +1887,7 @@ public:
   }
 
   int  logCount()       const { return _log_count; }
-  void enterHistoryMode()     { _in_history = true; _hist_cursor = 0; }
+  void enterHistoryMode()     { _in_history = true; _hist_cursor = 0; _dismiss_at = 0; }
 
   // Peek at the current (latest) unread message without consuming it
   const MsgEntry* peekCurrent() const {
@@ -1959,7 +2004,7 @@ public:
       display.setCursor(0, msg_start_y);
       display.printWordWrap(p->msg, display.width());
 
-      return (AUTO_OFF_MILLIS == 0) ? 10000 : 1000;
+      return (_task->getAutoOffMillis() == 0) ? 10000 : 1000;
     }
     if (num_unread == 0) return 1000;
     auto* p = &unread[head];
@@ -2032,7 +2077,7 @@ public:
     display.setCursor(0, msg_start_y);
     display.printWordWrap(p->msg, display.width());
 
-    return (AUTO_OFF_MILLIS == 0) ? 10000 : 1000;
+    return (_task->getAutoOffMillis() == 0) ? 10000 : 1000;
   }
 
   bool handleInput(char c) override {
@@ -2099,7 +2144,7 @@ public:
 void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs) {
   _display = display;
   _sensors = sensors;
-  _auto_off = millis() + AUTO_OFF_MILLIS;
+  _auto_off = millis() + getAutoOffMillis();
 
 #ifdef DISPLAY_TZ
   setenv("TZ", DISPLAY_TZ, 1);
@@ -2183,6 +2228,16 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   setCurrScreen(splash);
 }
 
+
+void UITask::extendAutoOff() {
+  _auto_off = millis() + getAutoOffMillis();
+}
+
+uint32_t UITask::getAutoOffMillis() const {
+  if (_node_prefs == NULL) return AUTO_OFF_MILLIS;
+  return AUTO_OFF_MS[constrain(_node_prefs->ui_auto_off_idx, 0, 4)];
+}
+
 void UITask::setClockDimMode(int m) {
   _clock_dim_mode = constrain(m, 0, 1);
   if (_node_prefs != NULL) {
@@ -2259,23 +2314,29 @@ void UITask::msgRead(int msgcount) {
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount, bool is_pm) {
   _msgcount = msgcount;
 
-  bool on_clock = (curr == home) && ((HomeScreen*)home)->isOnClockPage();
+  bool on_home   = (curr == home);
+  bool on_clock  = on_home && ((HomeScreen*)home)->isOnClockPage();
+  bool on_first  = on_home && !on_clock;   // самая первая страница, без CLOCK
 
   ((MsgPreviewScreen*)msg_preview)->addPreview(path_len, from_name, text, is_pm);
 
-  if (on_clock) {
+  // Показываем входящее только с ПЕРВОЙ страницы и ровно на MESSAGE_PREVIEW_MILLIS.
+  //
+  // Раньше переключение шло с любой страницы, и если пользователь листал
+  // настройки или другую страницу, сообщение успевало мелькнуть на долю
+  // секунды и смениться обратно следующим действием. Теперь: не на первой
+  // странице — просто копим в списке непрочитанных, ничего не показываем.
+  if (on_first) {
+    setCurrScreen(msg_preview);
+    ((MsgPreviewScreen*)msg_preview)->armAutoDismiss(MESSAGE_PREVIEW_MILLIS);
+  } else if (on_clock) {
     int pm_mode = ((HomeScreen*)home)->getPmClockMode();
     if (pm_mode == 1 && is_pm) {
       // PM inline: stay on clock page, show PM overlay
       ((HomeScreen*)home)->incrementClockPM();
       _next_refresh = 100;
-    } else if (pm_mode == 0) {
-      // All messages switch to msg_preview
-      setCurrScreen(msg_preview);
     }
-    // pm_mode==1 && !is_pm: silently queued, no screen switch
-  } else {
-    setCurrScreen(msg_preview);
+    // остальные варианты — молча в очередь, экран не трогаем
   }
 
   if (_display != NULL) {
@@ -2283,7 +2344,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
       _display->turnOn();
     }
     if (_display->isOn()) {
-      _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
+      _auto_off = millis() + getAutoOffMillis();  // extend the auto-off timer
       _next_refresh = 100;  // trigger refresh
     }
   }
@@ -2344,6 +2405,12 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
+  // Сообщаем экрану сообщений, что его показали или что с него ушли:
+  // на этом держится автоскрытие через 10 секунд.
+  if (msg_preview != NULL) {
+    if (c == msg_preview) ((MsgPreviewScreen*)msg_preview)->onShown();
+    else                  ((MsgPreviewScreen*)msg_preview)->onHidden();
+  }
   curr = c;
   _next_refresh = 100;
 }
@@ -2471,7 +2538,7 @@ void UITask::loop() {
 
   if (c != 0 && curr) {
     curr->handleInput(c);
-    _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
+    _auto_off = millis() + getAutoOffMillis();   // extend auto-off timer
     _next_refresh = 100;  // trigger refresh
   }
 
@@ -2530,7 +2597,7 @@ void UITask::loop() {
     // because OLED panels burn in quickly; only enable for LCD targets or
     // where the display is replaceable.
     if (board.isExternalPowered()) {
-      _auto_off = millis() + AUTO_OFF_MILLIS;
+      _auto_off = millis() + getAutoOffMillis();
     }
 #endif
 #if UI_NOISE_PAGE == 1
@@ -2538,12 +2605,12 @@ void UITask::loop() {
     // own — unconditionally, unlike the CLOCK page which only does so under the
     // clock-dim preference. Every other page keeps the normal timeout.
     if (home && ((HomeScreen*)home)->isOnNoisePage())
-      _auto_off = millis() + AUTO_OFF_MILLIS;
+      _auto_off = millis() + getAutoOffMillis();
 #endif
     if (_clock_dim_mode == 1) {
       // OFF: no dim while on CLOCK page
       if (home && ((HomeScreen*)home)->isOnClockPage())
-        _auto_off = millis() + AUTO_OFF_MILLIS;
+        _auto_off = millis() + getAutoOffMillis();
       if (millis() > _auto_off) { _saveElapsedToPrefs(); _display->turnOff(); }
     } else {
       // ON: normal auto-off
@@ -2584,7 +2651,7 @@ char UITask::checkDisplayOn(char c) {
       _display->turnOn();   // turn display on and consume event
       c = 0;
     }
-    _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
+    _auto_off = millis() + getAutoOffMillis();   // extend auto-off timer
     _next_refresh = 0;  // trigger refresh
   }
   return c;
