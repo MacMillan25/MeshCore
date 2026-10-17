@@ -703,6 +703,75 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     _prefs->freq = atof(&config[5]);
     savePrefs();
     strcpy(reply, "OK - reboot to apply");
+  } else if (memcmp(config, "bw ", 3) == 0) {
+    float bw = atof(&config[3]);
+    if (bw < 7.0f || bw > 500.0f) {
+      strcpy(reply, "Error: bw must be 7.8-500 kHz");
+    } else {
+      _prefs->bw = bw;
+      savePrefs();
+      strcpy(reply, "OK - reboot to apply");
+    }
+  } else if (memcmp(config, "sf ", 3) == 0) {
+    int sf = atoi(&config[3]);
+    if (sf < 5 || sf > 12) {
+      strcpy(reply, "Error: sf must be 5-12");
+    } else {
+      _prefs->sf = (uint8_t)sf;
+      savePrefs();
+      strcpy(reply, "OK - reboot to apply");
+    }
+  } else if (memcmp(config, "cr ", 3) == 0) {
+    int cr = atoi(&config[3]);
+    if (cr < 5 || cr > 8) {
+      strcpy(reply, "Error: cr must be 5-8");
+    } else {
+      _prefs->cr = (uint8_t)cr;
+      savePrefs();
+      strcpy(reply, "OK - reboot to apply");
+    }
+  } else if (memcmp(config, "tx ", 3) == 0) {
+    int tx = atoi(&config[3]);
+    if (tx < -9 || tx > 22) {
+      strcpy(reply, "Error: tx must be -9..22 dBm");
+    } else {
+      _prefs->tx_power_dbm = (int8_t)tx;
+      savePrefs();
+      strcpy(reply, "OK - reboot to apply");
+    }
+#if defined(DARKTEC)
+  } else if (memcmp(config, "darktec.capacity ", 17) == 0) {
+    // Ёмкость для режима UserPref: 1000..10000 мАч, любое число.
+    int mah = atoi(&config[17]);
+    if (mah < DarktecPrefsFormat::kCapacityMin || mah > DarktecPrefsFormat::kCapacityMax) {
+      sprintf(reply, "Error: capacity must be %u-%u mAh",
+              (unsigned)DarktecPrefsFormat::kCapacityMin,
+              (unsigned)DarktecPrefsFormat::kCapacityMax);
+    } else {
+      DarktecPrefsFormat::Settings s = DarktecPrefs::get();
+      s.capacity_mah = (uint16_t)mah;
+      s.capacity_mode = DarktecPrefsFormat::CAP_USER;
+      DarktecPrefs::save(s);
+      _board->setBatteryCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(s));
+      sprintf(reply, "OK - %d mAh (UserPref)", mah);
+    }
+  } else if (memcmp(config, "darktec.capmode ", 16) == 0) {
+    const char* v = &config[16];
+    DarktecPrefsFormat::Settings s = DarktecPrefs::get();
+    if (memcmp(v, "user", 4) == 0) {
+      s.capacity_mode = DarktecPrefsFormat::CAP_USER;
+    } else if (_atoi(v) == 3000) {
+      s.capacity_mode = DarktecPrefsFormat::CAP_3000;
+    } else if (_atoi(v) == 4000) {
+      s.capacity_mode = DarktecPrefsFormat::CAP_4000;
+    } else {
+      strcpy(reply, "Error: capmode must be user|3000|4000");
+      return;
+    }
+    DarktecPrefs::save(s);
+    _board->setBatteryCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(s));
+    sprintf(reply, "OK - %u mAh", (unsigned)DarktecPrefsFormat::effectiveCapacityMah(s));
+#endif
 #ifdef WITH_BRIDGE
   } else if (memcmp(config, "bridge.enabled ", 15) == 0) {
     _prefs->bridge_enabled = memcmp(&config[15], "on", 2) == 0;

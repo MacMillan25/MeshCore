@@ -13,14 +13,16 @@ TEST(DarktecPrefsFormatTest, BuildFlagDefaultsSanitized) {
   EXPECT_EQ(d.module, MOD_E22_900M33S);
   EXPECT_EQ(d.auto_off_idx, 0);
   EXPECT_EQ(d.noise_idx, 2);
+  EXPECT_EQ(d.capacity_mode, CAP_USER);
 }
 
 TEST(DarktecPrefsFormatTest, SerializeParseRoundTrip) {
   Settings in{};
-  in.capacity_mah = 4000;
+  in.capacity_mah = 4500;
   in.module = MOD_E22P_868M30S;
   in.auto_off_idx = 4;
   in.noise_idx = 0;
+  in.capacity_mode = CAP_4000;
 
   uint8_t buf[32];
   const size_t n = serialize(in, buf, sizeof(buf));
@@ -33,10 +35,11 @@ TEST(DarktecPrefsFormatTest, SerializeParseRoundTrip) {
 
   Settings out{};
   ASSERT_TRUE(parse(buf, n, out));
-  EXPECT_EQ(out.capacity_mah, 4000);
+  EXPECT_EQ(out.capacity_mah, 4500);
   EXPECT_EQ(out.module, MOD_E22P_868M30S);
   EXPECT_EQ(out.auto_off_idx, 4);
   EXPECT_EQ(out.noise_idx, 0);
+  EXPECT_EQ(out.capacity_mode, CAP_4000);
 }
 
 TEST(DarktecPrefsFormatTest, RejectsCorruption) {
@@ -65,25 +68,41 @@ TEST(DarktecPrefsFormatTest, RejectsCorruption) {
 
 TEST(DarktecPrefsFormatTest, SanitizeClampsRanges) {
   Settings s{};
-  s.capacity_mah = 99999;  // вне 500..30000 → дефолт
-  s.module = 77;           // неизвестный модуль → E22-33S
-  s.auto_off_idx = 9;      // вне 0..4 → 0
-  s.noise_idx = 9;         // вне 0..3 → 500 мс
+  s.capacity_mah = 99999;   // вне 1000..10000 → дефолт
+  s.module = 77;            // неизвестный модуль → E22-33S
+  s.auto_off_idx = 9;       // вне 0..4 → 0
+  s.noise_idx = 9;          // вне 0..3 → 500 мс
+  s.capacity_mode = 9;      // вне 0..2 → UserPref
   sanitize(s);
   EXPECT_EQ(s.capacity_mah, 3000);
   EXPECT_EQ(s.module, MOD_E22_900M33S);
   EXPECT_EQ(s.auto_off_idx, 0);
   EXPECT_EQ(s.noise_idx, 2);
+  EXPECT_EQ(s.capacity_mode, CAP_USER);
 }
 
 TEST(DarktecPrefsFormatTest, CapacityBoundaryValuesKept) {
   Settings s{};
-  s.capacity_mah = 500;
+  s.capacity_mah = 1000;
   sanitize(s);
-  EXPECT_EQ(s.capacity_mah, 500);
-  s.capacity_mah = 30000;
+  EXPECT_EQ(s.capacity_mah, 1000);
+  s.capacity_mah = 10000;
   sanitize(s);
-  EXPECT_EQ(s.capacity_mah, 30000);
+  EXPECT_EQ(s.capacity_mah, 10000);
+}
+
+TEST(DarktecPrefsFormatTest, EffectiveCapacityFollowsMode) {
+  Settings s{};
+  s.capacity_mah = 4500;
+
+  s.capacity_mode = CAP_USER;
+  EXPECT_EQ(effectiveCapacityMah(s), 4500);
+
+  s.capacity_mode = CAP_3000;
+  EXPECT_EQ(effectiveCapacityMah(s), 3000);
+
+  s.capacity_mode = CAP_4000;
+  EXPECT_EQ(effectiveCapacityMah(s), 4000);
 }
 
 // Старый файл beeline (версия 1) читается и переводит порядок модулей
@@ -93,7 +112,7 @@ TEST(DarktecPrefsFormatTest, ReadsVersion1AndRemapsModules) {
     buf[0] = 'D'; buf[1] = 'R'; buf[2] = 'T'; buf[3] = 'C';
     buf[4] = 1;
     buf[5] = 0x40; buf[6] = 0x1F;  // 8000 mAh → sanitize к дефолту
-    buf[7] = CHEM_LIFEPO4;
+    buf[7] = 0;                    // CHEM_LIION
     buf[8] = 1;
     buf[9] = old_module;
     buf[10] = 0xD0; buf[11] = 0x07;  // 2000 mA
@@ -117,6 +136,26 @@ TEST(DarktecPrefsFormatTest, ReadsVersion1AndRemapsModules) {
   makeV1(0, buf);  // v1: 0 = HT-RA62
   ASSERT_TRUE(parse(buf, kWireSize, out));
   EXPECT_EQ(out.module, MOD_HT_RA62);
+}
+
+// Версия 2 (наш первый перенос) не знала режима ёмкости: резерв был нулевой,
+// поэтому после чтения режим — UserPref, а ёмкость — как записана.
+TEST(DarktecPrefsFormatTest, ReadsVersion2AsUserCapacity) {
+  Settings in{};
+  in.capacity_mah = 4000;
+  uint8_t buf[32];
+  ASSERT_EQ(serialize(in, buf, sizeof(buf)), kWireSize);
+
+  buf[4] = 2;   // подменяем версию на старую
+  buf[10] = 0;  // в v2 это был резерв
+  const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
+  buf[18] = (uint8_t)(crc & 0xFF);
+  buf[19] = (uint8_t)(crc >> 8);
+
+  Settings out{};
+  ASSERT_TRUE(parse(buf, kWireSize, out));
+  EXPECT_EQ(out.capacity_mah, 4000);
+  EXPECT_EQ(out.capacity_mode, CAP_USER);
 }
 
 int main(int argc, char** argv) {
