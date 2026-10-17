@@ -1436,8 +1436,9 @@ public:
       char buf[26];
 
       // Таблица в рамке. Шапка V/A/W — инвертированный блок (белый фон,
-      // чёрные буквы), столбцы разделены вертикальными линиями, значения
-      // прижаты к правому краю своего столбца, чтобы числа не слипались.
+      // чёрные буквы), причём линии столбцов продолжены в шапку, поэтому
+      // каждая буква сидит в своей ячейке. Значения прижаты к правому краю
+      // столбца, чтобы числа не слипались.
       const int table_x = 0;
       const int table_y = content_y;
       const int table_w = display.width();
@@ -1448,16 +1449,22 @@ public:
       // Метки BATT/CHRG отступают от левой рамки: вплотную к линии буквы
       // слипаются с ней и читаются тяжелее.
       const int col_label_x = 3;
-      const int col_v_x = 40, col_v_w = 32;
-      const int col_a_x = 72, col_a_w = 28;
-      const int col_w_x = 100, col_w_w = display.width() - 100 - 1;
+      const int col_v_x = 38, col_v_w = 32;
+      const int col_a_x = 71, col_a_w = 26;
+      const int col_w_x = 98, col_w_w = display.width() - 98 - 1;
 
+      // Линия между шапкой ноды и таблицей.
       display.setColor(UIColor::primary_txt);
+      display.fillRect(0, table_y - 1, table_w, 1);
       display.drawRect(table_x, table_y, table_w, table_h);
 
-      // Инвертированная шапка.
+      // Инвертированная шапка: белая плашка, продолжения столбцов чёрным,
+      // буквы V/A/W по центрам ячеек.
       display.fillRect(table_x + 1, table_y + 1, table_w - 2, head_h - 1);
       display.setColor(UIColor::window_bkg);
+      display.fillRect(col_v_x, table_y, 1, head_h);
+      display.fillRect(col_a_x, table_y, 1, head_h);
+      display.fillRect(col_w_x, table_y, 1, head_h);
       display.setCursor(col_v_x + (col_v_w - display.getTextWidth("V")) / 2, table_y + 1);
       display.print("V");
       display.setCursor(col_a_x + (col_a_w - display.getTextWidth("A")) / 2, table_y + 1);
@@ -1465,14 +1472,18 @@ public:
       display.setCursor(col_w_x + (col_w_w - display.getTextWidth("W")) / 2, table_y + 1);
       display.print("W");
 
-      // Линия под шапкой и разделители столбцов.
-      display.setColor(UIColor::primary_txt);
-      display.fillRect(table_x + 1, table_y + head_h, table_w - 2, 1);
+      // Разделители столбцов идут только в области данных — до линии,
+      // которая отделяет строку счётчика заряда.
       const int sep_y = table_y + head_h;
-      const int sep_h = table_h - head_h - 1;
+      const int sep_bottom = table_y + head_h + 2 * row_h - 1;
+      const int sep_h = sep_bottom - sep_y + 1;
+      display.setColor(UIColor::primary_txt);
       display.fillRect(col_v_x, sep_y, 1, sep_h);
       display.fillRect(col_a_x, sep_y, 1, sep_h);
       display.fillRect(col_w_x, sep_y, 1, sep_h);
+
+      // Линия над счётчиком.
+      display.fillRect(table_x + 1, sep_bottom, table_w - 2, 1);
 
       int y = table_y + head_h + 1;
       for (int i = 0; i < 2; i++) {
