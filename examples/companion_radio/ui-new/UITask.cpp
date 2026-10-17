@@ -1435,47 +1435,81 @@ public:
 
       char buf[26];
 
-      // Таблица в рамке: заголовок столбцов, две строки рельсов и счётчик
-      // заряда. Рамка держит взгляд на числах и отделяет таблицу от шапки.
+      // Таблица в рамке. Шапка V/A/W — инвертированный блок (белый фон,
+      // чёрные буквы), столбцы разделены вертикальными линиями, значения
+      // прижаты к правому краю своего столбца, чтобы числа не слипались.
       const int table_x = 0;
       const int table_y = content_y;
       const int table_w = display.width();
       const int table_h = display.height() - table_y;
+      const int head_h = line_h;
       const int row_h = line_h;
+
+      const int col_label_x = 1;
+      const int col_v_x = 40, col_v_w = 32;
+      const int col_a_x = 72, col_a_w = 28;
+      const int col_w_x = 100, col_w_w = display.width() - 100 - 1;
 
       display.setColor(UIColor::primary_txt);
       display.drawRect(table_x, table_y, table_w, table_h);
 
-      snprintf(buf, sizeof(buf), "%-4s%5s%5s%5s", "", "V", "A", "W");
-      display.setCursor(table_x + 1, table_y + 1);
-      display.print(buf);
-      display.fillRect(table_x + 1, table_y + row_h, table_w - 2, 1);
+      // Инвертированная шапка.
+      display.fillRect(table_x + 1, table_y + 1, table_w - 2, head_h - 1);
+      display.setColor(UIColor::window_bkg);
+      display.setCursor(col_v_x + (col_v_w - display.getTextWidth("V")) / 2, table_y + 1);
+      display.print("V");
+      display.setCursor(col_a_x + (col_a_w - display.getTextWidth("A")) / 2, table_y + 1);
+      display.print("A");
+      display.setCursor(col_w_x + (col_w_w - display.getTextWidth("W")) / 2, table_y + 1);
+      display.print("W");
 
-      int y = table_y + row_h + 1;
+      // Линия под шапкой и разделители столбцов.
+      display.setColor(UIColor::primary_txt);
+      display.fillRect(table_x + 1, table_y + head_h, table_w - 2, 1);
+      const int sep_y = table_y + head_h;
+      const int sep_h = table_h - head_h - 1;
+      display.fillRect(col_v_x, sep_y, 1, sep_h);
+      display.fillRect(col_a_x, sep_y, 1, sep_h);
+      display.fillRect(col_w_x, sep_y, 1, sep_h);
+
+      int y = table_y + head_h + 1;
       for (int i = 0; i < 2; i++) {
+        display.setColor(UIColor::primary_txt);
+        display.setCursor(col_label_x, y);
+        display.print(rows[i].label);
+
         if (rows[i].found) {
-          // Past 9.99 W a second decimal would push the column off the right
-          // edge, so the wattage steps down to one decimal and keeps its slot.
+          snprintf(buf, sizeof(buf), "%.2f", rows[i].v);
+          display.setCursor(col_v_x + col_v_w - display.getTextWidth(buf) - 2, y);
+          display.print(buf);
+
+          snprintf(buf, sizeof(buf), "%.2f", rows[i].a);
+          display.setCursor(col_a_x + col_a_w - display.getTextWidth(buf) - 2, y);
+          display.print(buf);
+
+          // Past 9.99 W a second decimal would not fit the 27px slot, so the
+          // wattage steps down to one decimal and keeps its column.
           float w = rows[i].v * rows[i].a;
-          if (w > 9.99f)
-            snprintf(buf, sizeof(buf), "%-4s%5.2f%5.2f%5.1f",
-                     rows[i].label, rows[i].v, rows[i].a, w);
-          else
-            snprintf(buf, sizeof(buf), "%-4s%5.2f%5.2f%5.2f",
-                     rows[i].label, rows[i].v, rows[i].a, w);
+          snprintf(buf, sizeof(buf), (w > 9.99f) ? "%.1f" : "%.2f", w);
+          display.setCursor(col_w_x + col_w_w - display.getTextWidth(buf) - 2, y);
+          display.print(buf);
         } else {
-          snprintf(buf, sizeof(buf), "%-4s%5s%5s%5s", rows[i].label, "--", "--", "--");
+          display.setCursor(col_v_x + col_v_w - display.getTextWidth("--") - 2, y);
+          display.print("--");
+          display.setCursor(col_a_x + col_a_w - display.getTextWidth("--") - 2, y);
+          display.print("--");
+          display.setCursor(col_w_x + col_w_w - display.getTextWidth("--") - 2, y);
+          display.print("--");
         }
-        display.setCursor(table_x + 1, y);
-        display.print(buf);
         y += row_h;
       }
 
 #if defined(DARKTEC)
       // Залито в пакет за текущую сессию заряда (счётчик в DarktecBoard).
-      snprintf(buf, sizeof(buf), "CHRG %lu mAh",
+      // Подпись отличается от метки рельса CHRG, чтобы строки не путались.
+      snprintf(buf, sizeof(buf), "CHARGED %lu mAh",
                (unsigned long)board.getChargeMah());
-      display.setCursor(table_x + 1, y);
+      display.setCursor(table_x + 2, y);
       display.print(buf);
 #endif
 
