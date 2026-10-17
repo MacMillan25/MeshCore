@@ -28,41 +28,22 @@ enum ModuleCode : uint8_t {
 };
 
 struct Settings {
-  uint16_t capacity_mah;  // ёмкость пакета для режима UserPref, mAh (1000..10000)
+  uint16_t capacity_mah;  // ёмкость пакета, mAh (3000 / 4000)
   uint8_t module;         // ModuleCode
   uint8_t auto_off_idx;   // 0=15s, 1=30s, 2=1m, 3=5m, 4=1h
   uint8_t noise_idx;      // 0=100ms, 1=250ms, 2=500ms, 3=1000ms
-  uint8_t capacity_mode;  // CapacityMode: 0=UserPref, 1=3000, 2=4000
 };
 
-// Откуда брать ёмкость. В меню листаются три пункта; UserPref — значение,
-// которое задаёт прошивальщик (capacity_mah), 3000/4000 — фиксированные.
-enum CapacityMode : uint8_t {
-  CAP_USER = 0,
-  CAP_3000 = 1,
-  CAP_4000 = 2,
-};
-constexpr uint8_t kCapacityModeCount = 3;
-
-constexpr uint16_t kCapacityMin = 1000;
-constexpr uint16_t kCapacityMax = 10000;
+constexpr uint16_t kCapacityMin = 500;
+constexpr uint16_t kCapacityMax = 30000;
 constexpr uint16_t kCapacityDefault = 3000;
 
 constexpr uint8_t kAutoOffCount = 5;
 constexpr uint8_t kNoiseCount = 4;
 
-constexpr uint8_t kWireVersion = 3;
+constexpr uint8_t kWireVersion = 2;
 constexpr uint8_t kWireSize = 20;  // magic(4) + ver(1) + payload(13) + crc(2)
 constexpr uint8_t kPayloadSize = 13;
-
-inline void sanitize(Settings& s);
-
-// Фактическая ёмкость пакета: UserPref или фиксированная 3000/4000.
-inline uint16_t effectiveCapacityMah(const Settings& s) {
-  if (s.capacity_mode == CAP_3000) return 3000;
-  if (s.capacity_mode == CAP_4000) return 4000;
-  return s.capacity_mah;
-}
 
 inline void sanitize(Settings& s);
 
@@ -76,7 +57,6 @@ inline Settings buildFlagDefaults() {
   s.module = MOD_E22_900M33S;
   s.auto_off_idx = 0;
   s.noise_idx = 2;  // 500 мс — как было в 1.17.1
-  s.capacity_mode = CAP_USER;
   sanitize(s);
   return s;
 }
@@ -88,7 +68,6 @@ inline void sanitize(Settings& s) {
   if (s.module > MOD_E22P_868M30S) s.module = MOD_E22_900M33S;
   if (s.auto_off_idx >= kAutoOffCount) s.auto_off_idx = 0;
   if (s.noise_idx >= kNoiseCount) s.noise_idx = 2;
-  if (s.capacity_mode >= kCapacityModeCount) s.capacity_mode = CAP_USER;
 }
 
 // CRC16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
@@ -116,8 +95,7 @@ inline size_t serialize(const Settings& s, uint8_t* buf, size_t len) {
   buf[7] = t.module;
   buf[8] = t.auto_off_idx;
   buf[9] = t.noise_idx;
-  buf[10] = t.capacity_mode;
-  for (int i = 0; i < 7; i++) buf[11 + i] = 0x00;
+  for (int i = 0; i < 8; i++) buf[10 + i] = 0x00;
   const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
   buf[18] = (uint8_t)(crc & 0xFF);
   buf[19] = (uint8_t)(crc >> 8);
@@ -138,39 +116,6 @@ inline bool parseV1(const uint8_t* buf, size_t len, Settings& out) {
   s.module = (old_module <= 3) ? kMap[old_module] : MOD_E22_900M33S;
   s.auto_off_idx = 0;
   s.noise_idx = 2;
-  s.capacity_mode = CAP_USER;
-  sanitize(s);
-  out = s;
-  return true;
-}
-
-// v2 (наш первый перенос): те же байты, но резерв вместо режима ёмкости.
-// Режим всегда UserPref — старая ёмкость 3000/4000 и была пользовательской.
-inline bool parseV2(const uint8_t* buf, size_t len, Settings& out) {
-  if (len < kWireSize) return false;
-  const uint16_t crc_stored = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
-  if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
-  Settings s{};
-  s.capacity_mah = (uint16_t)(buf[5] | ((uint16_t)buf[6] << 8));
-  s.module = buf[7];
-  s.auto_off_idx = buf[8];
-  s.noise_idx = buf[9];
-  s.capacity_mode = CAP_USER;
-  sanitize(s);
-  out = s;
-  return true;
-}
-
-inline bool parseV3(const uint8_t* buf, size_t len, Settings& out) {
-  if (len < kWireSize) return false;
-  const uint16_t crc_stored = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
-  if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
-  Settings s{};
-  s.capacity_mah = (uint16_t)(buf[5] | ((uint16_t)buf[6] << 8));
-  s.module = buf[7];
-  s.auto_off_idx = buf[8];
-  s.noise_idx = buf[9];
-  s.capacity_mode = buf[10];
   sanitize(s);
   out = s;
   return true;
@@ -179,12 +124,18 @@ inline bool parseV3(const uint8_t* buf, size_t len, Settings& out) {
 inline bool parse(const uint8_t* buf, size_t len, Settings& out) {
   if (len < kWireSize) return false;
   if (buf[0] != 'D' || buf[1] != 'R' || buf[2] != 'T' || buf[3] != 'C') return false;
-  switch (buf[4]) {
-    case 1: return parseV1(buf, len, out);
-    case 2: return parseV2(buf, len, out);
-    case kWireVersion: return parseV3(buf, len, out);
-    default: return false;
-  }
+  if (buf[4] == 1) return parseV1(buf, len, out);
+  if (buf[4] != kWireVersion) return false;
+  const uint16_t crc_stored = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
+  if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
+  Settings s{};
+  s.capacity_mah = (uint16_t)(buf[5] | ((uint16_t)buf[6] << 8));
+  s.module = buf[7];
+  s.auto_off_idx = buf[8];
+  s.noise_idx = buf[9];
+  sanitize(s);
+  out = s;
+  return true;
 }
 
 }  // namespace DarktecPrefsFormat

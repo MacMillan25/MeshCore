@@ -120,9 +120,7 @@ void DarktecBoard::begin() {
     g_power_board = this;
     DarktecPrefs::begin();
     const DarktecPrefsFormat::Settings& p = DarktecPrefs::get();
-    // Ёмкость — с учётом режима UserPref/3000/4000: от неё масштабируются
-    // остаток и ETA в модели.
-    _pm.setCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(p));
+    _pm.setCapacityMah((float)p.capacity_mah);
     _pm.setModule(p.module);
 }
 

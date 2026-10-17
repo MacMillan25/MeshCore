@@ -22,7 +22,7 @@
 /* On-demand: LORA_* уже заданы в -include defs. Запасные значения на случай
  * если defs не подключили. */
 #ifndef LORA_FREQ
-#define LORA_FREQ  869.900
+#define LORA_FREQ  869.075
 #endif
 #ifndef LORA_BW
 #define LORA_BW    62.5
@@ -42,7 +42,7 @@
 #ifdef LORA_FREQ
 #undef LORA_FREQ
 #endif
-#define LORA_FREQ  869.900
+#define LORA_FREQ  869.075
 
 #ifdef LORA_BW
 #undef LORA_BW
