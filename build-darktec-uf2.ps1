@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Сборка прошивки Darktec и выкладка готового .uf2 в out\uf2.
 
@@ -93,7 +93,7 @@ function Ensure-Git {
 # Версия по умолчанию — из MyMesh.h, как это делает scripts/darktec-version.sh.
 function Get-BaseVersion {
     $meshH = Join-Path $root 'examples\companion_radio\MyMesh.h'
-    $m = Select-String -Path $meshH -Pattern '#define\s+FIRMWARE_VERSION\s+"(v[0-9]+\.[0-9]+\.[0-9]+)"' |
+    $m = Select-String -Path $meshH -Pattern '#define\s+FIRMWARE_VERSION\s+"(v[0-9]+\.[0-9]+\.[0-9]+[0-9a-z]*)"' |
          Select-Object -First 1
     if ($m) { return $m.Matches[0].Groups[1].Value }
     throw "Не нашёл FIRMWARE_VERSION в $meshH"
