@@ -20,3 +20,6 @@ platformio.local.ini
 .claude/
 watch-hotfix.bat
 watch-hotfix.ps1
+
+# макеты экранов: личная папка, в git не идёт
+mockups/
