@@ -1,164 +1,179 @@
-# south_edition — Extended Companion Radio Fork
+# DarkTec — прошивка MeshCore для LoRa-меша
 
-> **Branch:** `south_edition` &nbsp;|&nbsp; **Base:** [MeshCore](https://github.com/ripplebiz/MeshCore) by Liam Cottle &nbsp;|&nbsp; **Wiki:** [south_edition docs](../../wiki)
+Русская сборка MeshCore под наше железо: **nRF52840 + SX1262**, OLED 128×64, INA3221, GPS, буззер и реле. Всё, что нужно для автономной ноды на 868/900 МГц в поле и дома.
 
-This fork extends MeshCore's **companion radio** firmware with features for real-world field deployment: unified transport switching, advanced CLI, improved display support, and stability fixes for NRF52 and ESP32 platforms.
+Цепочка форков:
 
-## What's different in south_edition
-
-**One firmware, three transports** — `_uni` builds support BLE, WiFi (TCP), and USB in a single binary. Switch at runtime via the Settings menu or CLI — no reflashing required.
-
-**Companion CLI** — control the node remotely via PM (Remote CLI) or a dedicated TerminalCLI channel. Full command set: radio params, BLE PIN, WiFi networks, time sync, GPS, power management.
-
-**Extended display support** — adaptive UI for OLED, eInk (E213, E290, Wireless Paper, GxEPD2) and color TFT (Heltec T114 / ST7789). Clock page with time sync, date, and configurable dimming. Anti-ghosting strategy for eInk (periodic full refresh + clean power-off).
-
-**Cyr2Lat** — optional Cyrillic-to-Latin transliteration for channel names, contacts and room-server names on displays.
-
-**NRF52 stability** — deferred flash writes avoid BLE/flash deadlock on S140; reboot deferred until BLE disconnects; stack overflow fixes in Remote CLI.
-
-**BLE PIN management** — auto mode (new random PIN each boot) or fixed custom PIN, persisted in prefs. Manageable via CLI (`set ble.pin`) or companion app.
-
-## Firmware variants
-
-| Suffix | Transport | Platforms |
-|--------|-----------|-----------|
-| `_companion_radio_uni` | BLE + WiFi + USB (runtime switch) | ESP32 / ESP32-S3 |
-| `_companion_radio_ble` | BLE only | NRF52 (T114, ProMicro) |
-
-Pre-built binaries are attached to each [release tag](../../releases).
-
-## Resources
-
-- [Wiki — full documentation](../../wiki) — CLI reference, WiFi switching, display setup, release notes
-- [Release notes](../../wiki/releases-companion) — changelog per beta tag
+```
+meshcore-dev/MeshCore      официальная прошивка
+        ↓
+beeline09/MeshCore         south_edition (южная сборка)
+        ↓
+MacMillan25/MeshCore       DarkTec — этот репозиторий
+```
 
 ---
 
-## About MeshCore
+## Чем DarkTec отличается
 
-MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
+**От официальной MeshCore.** Официальная прошивка — универсальная: она не знает про наши экраны, модель батареи, реле и типы радиомодулей. У нас всё это есть, а лишние экраны и страницы, которые на нашем железе бесполезны, убраны.
 
-## 🔍 What is MeshCore?
+**От south_edition (beeline09).** Южная сборка — это транспорт, CLI, работа с дисплеями и стабильность nRF52; мы её уважаем и держим в основе. Но SOC и ETA там считаются иначе, а шум/INA/батарея/реле и выбор радиомодуля на лету — наши.
 
-MeshCore now supports a range of LoRa devices, allowing for easy flashing without the need to compile firmware manually. Users can flash a pre-built binary using tools like Adafruit ESPTool and interact with the network through a serial console.
-MeshCore provides the ability to create wireless mesh networks, similar to Meshtastic and Reticulum but with a focus on lightweight multi-hop packet routing for embedded projects. Unlike Meshtastic, which is tailored for casual LoRa communication, or Reticulum, which offers advanced networking, MeshCore balances simplicity with scalability, making it ideal for custom embedded solutions, where devices (nodes) can communicate over long distances by relaying messages through intermediate nodes. This is especially useful in off-grid, emergency, or tactical situations where traditional communication infrastructure is unavailable.
+| Что | Официальная | south_edition | **DarkTec** |
+|---|---|---|---|
+| Модули | HT-RA62 и др. | E22 | **E22-33S, E22-30S, HT-RA62, E22P — переключение в меню** |
+| Прошивок на роль | 1 | 1 | **1 (8 ролей, по одной на роль)** |
+| SOC | линейная оценка | по ёмкости | **по реальной кривой разряда + IR-компенсация** |
+| ETA | нет | есть | **интегрированием по кривой, с учётом трафика** |
+| Экраны шума/INA/батареи | нет | нет | **есть** |
+| Реле T2 | нет | нет | **есть** |
+| Настройки DarkTec | нет | нет | **подменю `[ Darktec ]`** |
 
-## ⚡ Key Features
+---
 
-* Multi-Hop Packet Routing
-  * Devices can forward messages across multiple nodes, extending range beyond a single radio's reach.
-  * Supports up to a configurable number of hops to balance network efficiency and prevent excessive traffic.
-  * Nodes use fixed roles where "Companion" nodes are not repeating messages at all to prevent adverse routing paths from being used.
-* Supports LoRa Radios – Works with Heltec, RAK Wireless, and other LoRa-based hardware.
-* Decentralized & Resilient – No central server or internet required; the network is self-healing.
-* Low Power Consumption – Ideal for battery-powered or solar-powered devices.
-* Simple to Deploy – Pre-built example applications make it easy to get started.
+## Поддерживаемые радиомодули
 
-## 🎯 What Can You Use MeshCore For?
+| Модуль | Частота | Мощность | В прошивке |
+|---|---|---|---|
+| E22-900M33S | 900 МГц | 1 Вт | `Radio mod: E22-33S` |
+| E22-900M30S | 900 МГц | 0.5 Вт | `Radio mod: E22-30S` |
+| HT-RA62 | 900 МГц | 1 Вт | `Radio mod: RA62` |
+| E22P-868M30S | 868 МГц | 1 Вт | `Radio mod: E22P` |
 
-* Off-Grid Communication: Stay connected even in remote areas.
-* Emergency Response & Disaster Recovery: Set up instant networks where infrastructure is down.
-* Outdoor Activities: Hiking, camping, and adventure racing communication.
-* Tactical & Security Applications: Military, law enforcement, and private security use cases.
-* IoT & Sensor Networks: Collect data from remote sensors and relay it back to a central location.
+**Модуль выбирается в настройках, а не сборкой.** Одна прошивка работает с любым из четырёх — меняется логика пина 6 и таблица токов для ETA на лету. Перепрошивать при смене модуля не надо.
 
-## 🚀 How to Get Started
+- Компаньон: `Настройки → [ Darktec ] → Radio mod`.
+- Любая роль с CLI: `set radio.module 0..3`, проверить — `get radio.module`.
 
-- Watch the [MeshCore QuickStart Playlist](https://www.youtube.com/watch?v=iaFltojJrAc&list=PLshzThxhw4O4WU_iZo3NmNZOv6KMrUuF9) by The Comms Channel
-- Watch the [MeshCore Technical Presentation](https://www.youtube.com/watch?v=OwmkVkZQTf4) by Liam Cottle.
-- Read through our [Frequently Asked Questions](./docs/faq.md) and [Documentation](https://docs.meshcore.io).
-- Flash the MeshCore firmware on a supported device.
-- Connect with a supported client.
+> Выбранный модуль должен совпадать с тем, что впаян. Ошиблись — радио просто не заработает: это не баг, а признак неверного выбора.
 
-For developers:
+---
 
-- Install [PlatformIO](https://docs.platformio.org) in [Visual Studio Code](https://code.visualstudio.com).
-- Clone and open the MeshCore repository in Visual Studio Code.
-- See the example applications you can modify and run:
-  - [Companion Radio](./examples/companion_radio) - For use with an external chat app, over BLE, USB or Wi-Fi.
-  - [KISS Modem](./examples/kiss_modem) - Serial KISS protocol bridge for host applications. ([protocol docs](./docs/kiss_modem_protocol.md))
-  - [Simple Repeater](./examples/simple_repeater) - Extends network coverage by relaying messages.
-  - [Simple Room Server](./examples/simple_room_server) - A simple BBS server for shared Posts.
-  - [Simple Secure Chat](./examples/simple_secure_chat) - Secure terminal based text communication between devices.
-  - [Simple Sensor](./examples/simple_sensor) - Remote sensor node with telemetry and alerting.
+## Зачем SOC и ETA
 
-The Simple Secure Chat example can be interacted with through the Serial Monitor in Visual Studio Code, or with a Serial USB Terminal on Android.
+Нода живёт на банке 18650/1S Li-ion и часто стоит там, где её никто не видит месяцами. Процент «по прямой линии» на литии врёт: в полке 30–50% на 1% SOC приходится 3–5 мВ, а под передачей клеммы просаживаются на сотни милливольт.
 
-## ⚡️ MeshCore Flasher
+Что сделано:
 
-We have prebuilt firmware ready to flash on supported devices.
+- **Процент — по реальной кривой разряда**, снятой с живой банки (21 точка, шаг 5%).
+- **Замер только в покое** — модель игнорирует напряжение, пока в эфире была активность меньше 3 секунд назад.
+- **Компенсация заряда:** `V_банки = V_изм − I·R`, иначе при заряде 2 А нода рисует 100% на полупустой банке.
+- **ETA — интегрированием по кривой**, а не делением остатка на средний ток: ток ноды сам растёт при падении напряжения.
+- **Полярность шунта определяется автоматически** — на разных платах знак тока разный.
 
-- Launch https://meshcore.io/flasher
-- Select a supported device
-- Flash one of the firmware types:
-  - Companion, Repeater or Room Server
-- Once flashing is complete, you can connect with one of the MeshCore clients below.
+Залитые мАч в SOC и ETA **не участвуют**: нода обычно заряжается от 55–70%, а не с нуля.
 
-## 📱 MeshCore Clients
+---
 
-**Companion Firmware**
+## Экраны
 
-The companion firmware can be connected to via BLE, USB or Wi-Fi depending on the firmware type you flashed.
+| Экран | Что показывает |
+|---|---|
+| **Шум** | график шумового пола в эфире, 64 столбика, сглаживание по 3 точкам. Долгое нажатие BTN листает скорость: 100 / 250 / 500 / 1000 мс |
+| **INA** | два рельса INA3221 — батарея и зарядник: напряжение, ток, мощность, «залито за сессию» |
+| **Батарея** | напряжение, процент, остаток в мАч, ETA, ток прямо сейчас |
 
-- Web: https://app.meshcore.nz
-- Android: https://play.google.com/store/apps/details?id=com.liamcottle.meshcore.android
-- iOS: https://apps.apple.com/us/app/meshcore/id6742354151?platform=iphone
-- NodeJS: https://github.com/liamcottle/meshcore.js
-- Python: https://github.com/fdlamotte/meshcore-cli
+Экраны есть только у компаньона. У репитера, комнаты, сенсора и KISS — своя простая отрисовка.
 
-**Repeater and Room Server Firmware**
+---
 
-The repeater and room server firmware can be set up via USB in the web config tool.
+## Реле
 
-- https://config.meshcore.io
+Выход **T2** (ключ VT3, P0.08) управляется по радио как обычная настройка сенсора:
 
-They can also be managed via LoRa in the mobile app by using the Remote Management feature.
-
-## 🛠 Hardware Compatibility
-
-MeshCore is designed for devices listed in the [MeshCore Flasher](https://meshcore.io/flasher)
-
-## 📜 License
-
-MeshCore is open-source software released under the MIT License. You are free to use, modify, and distribute it for personal and commercial projects.
-
-## Contributing
-
-Please submit PR's using 'dev' as the base branch!
-For minor changes just submit your PR and we'll try to review it, but for anything more 'impactful' please open an Issue first and start a discussion. It is better to sound out what it is you want to achieve first, and try to come to a consensus on what the best approach is, especially when it impacts the structure or architecture of this codebase.
-
-Here are some general principles you should try to adhere to:
-* Keep it simple. Please, don't think like a high-level lang programmer. Think embedded, and keep code concise, without any unnecessary layers.
-* No dynamic memory allocation, except during setup/begin functions.
-* Use the same brace and indenting style that's in the core source modules. (A .clang-format is probably going to be added soon, but please do NOT retroactively re-format existing code. This just creates unnecessary diffs that make finding problems harder)
-
-Help us prioritize! Please react with thumbs-up to issues/PRs you care about most. We look at reaction counts when planning work.
-
-### Running unit tests
-
-To run unit tests, run the following command:
-
-```bash
-pio test --environment native --verbose
+```
+sensor set RELAY ON | OFF | TOGGLE     ->  RELAY: ON / RELAY: OFF
+sensor get RELAY                       ->  > ON / > OFF
 ```
 
-## Road-Map / To-Do
+Принимаются также `1/0`, `true/false`, `yes/no`, синоним ключа `t2`. **При старте реле всегда выключено** — так безопаснее для силовой нагрузки. Состояние намеренно не сохраняется.
 
-There are a number of fairly major features in the pipeline, with no particular time-frames attached yet. In very rough chronological order:
-- [X] Companion radio: UI redesign
-- [X] Repeater + Room Server: add ACL's (like Sensor Node has)
-- [X] Standardise Bridge mode for repeaters
-- [ ] Repeater/Bridge: Standardise the Transport Codes for zoning/filtering
-- [X] Core + Repeater: enhanced zero-hop neighbour discovery
-- [ ] Core: round-trip manual path support
-- [ ] Companion + Apps: support for multiple sub-meshes (and 'off-grid' client repeat mode)
-- [ ] Core + Apps: support for LZW message compression
-- [ ] Core: dynamic CR (Coding Rate) for weak vs strong hops
-- [ ] Core: new framework for hosting multiple virtual nodes on one physical device
-- [ ] V2 protocol spec: discussion and consensus around V2 packet protocol, including path hashes, new encryption specs, etc
+---
 
-## 📞 Get Support
+## Настройки `[ Darktec ]`
 
-- Report bugs and request features on the [GitHub Issues](https://github.com/meshcore-dev/meshcore/issues) page.
-- Find additional guides and components on [my site](https://buymeacoffee.com/ripplebiz).
-- Join [MeshCore Discord](https://meshcore.gg) to chat with the developers and get help from the community.
+- **Capacity** — 4000 → 3000 → пользовательская (её задаёт прошивальщик).
+- **Screen on** — 15s / 30s / 1m / 5m / 1h.
+- **NF Speed** — скорость графика шума.
+- **Radio mod** — впаянный модуль.
+
+Для прошивальщика есть CLI (по USB, работает у всех ролей):
+
+```
+set radio 869.900,62.5,8,6    # частота, полоса, SF, CR
+set tx 22                     # мощность -9..22 dBm
+set radio.module 0..3         # модуль
+set darktec.capacity 4500     # пользовательская ёмкость
+reboot                        # применить частоту/полосу/SF/CR
+```
+
+---
+
+## Роли
+
+Одна прошивка на роль, всего восемь:
+
+| Роль | env |
+|---|---|
+| репитер | `Darktec_repeater` |
+| репитер + мост RS232 | `Darktec_repeater_bridge_rs232_serial1` |
+| комнатный сервер | `Darktec_room_server` |
+| простой чат с терминала | `Darktec_terminal_chat` |
+| компаньон по USB | `Darktec_companion_radio_usb` |
+| компаньон по BLE | `Darktec_companion_radio_ble` |
+| сенсор + GPS | `Darktec_sensor` |
+| KISS-модем | `Darktec_kiss_modem` |
+
+---
+
+## Прошивка
+
+**Рекомендуем [DarkFlasher](https://github.com/MacMillan25/DarkFlasher)** — он сам скачивает актуальную прошивку из релизов этого репозитория, проверяет sha256, прошивает ноду и **сразу записывает настройки по USB**: имя, канал (частота/полоса/SF/CR), мощность, ёмкость батареи, радиомодуль и коэффициент АЦП. Выбираешь роль и версию — дальше он всё делает сам.
+
+Порядок:
+
+1. Скачать [архив DarkFlasher](https://github.com/MacMillan25/DarkFlasher/releases/latest) и распаковать целиком рядом с `_internal` и `firmware`.
+2. Запустить `DarkFlasher.exe`, выбрать роль и версию прошивки, проверить настройки.
+3. Нажать **ПРОШИТЬ**.
+4. Плату перевести в загрузчик: **быстро нажать RESET два раза** — появится диск `NRF52BOOT`, программа поймает его сама.
+5. Дальше автоматически: запись → перезагрузка → поиск ноды по COM → отправка настроек.
+
+Если прошивать вручную:
+
+1. Скачать UF2 нужной роли из [Releases](../../releases) (теги `darktec-v1.18.0dN`).
+2. Перевести плату в DFU: дважды нажать reset — появится диск `NRF52BOOT`.
+3. Скопировать `.uf2` на диск. Плата прошьётся и перезагрузится сама.
+
+Версии: база остаётся `1.18.0`, наши выпуски — `1.18.0d1`, `1.18.0d2`, … Суффикс `d` отличает наш выпуск от сборок beeline (`b`).
+
+---
+
+## Статус и ограничения
+
+**Прошивка экспериментальная, но стабильная.** На ней работают живые ноды; все восемь окружений собираются, релизы выкладываются по мере правок. Но это не «поставил и забыл»: что-то ещё допиливается по ходу.
+
+Честно об ограничениях:
+
+- **Токи E22-900M30S и HT-RA62 не замерены** — в ETA для них расчётные значения. Требуют проверки амперметром.
+- **Точность процента упирается в железо.** В полке кривой 3–5 мВ на 1% SOC, а напряжение меряется делителем через АЦП nRF52. Точнее было бы брать с INA3221 — пока нет.
+- **ETA зависит от наблюдаемого трафика** за последние 10 минут, а не от будущего.
+- **KISS-модем и terminal_chat** не имеют своего меню и CLI: модуль они читают из настроек при старте, поменять из ноды нечем.
+- **Реле при старте выключено** и состояние не помнит — это осознанно.
+
+---
+
+## Ссылки
+
+- [DarkFlasher](https://github.com/MacMillan25/DarkFlasher) — рекомендуемый прошивальщик
+- [Группа в Telegram](https://t.me/DarkElectronics) — новости и обсуждение DarkTec
+- [Ноды DarkTec](https://t.me/Dark_Electronics) — где купить железо
+- [beeline09/MeshCore](https://github.com/beeline09/MeshCore) — база, south_edition
+- [meshcore-dev/MeshCore](https://github.com/meshcore-dev/MeshCore) — официальная прошивка
+- `AGENTS.md` в корне — правила проекта, карта пинов и грабли (для тех, кто лезет в код)
+
+---
+
+## Лицензия
+
+MIT — как и у MeshCore. Copyright (c) 2025 Scott Powell / rippleradios.com.
