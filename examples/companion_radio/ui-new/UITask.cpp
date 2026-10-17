@@ -231,6 +231,9 @@ class HomeScreen : public UIScreen {
   unsigned long _darktec_note_until = 0;
   int           _darktec_note_item = 0;
   char          _darktec_note[24] = "";
+  // Режим правки значения пункта (значение в [скобках]): вход — долгое
+  // нажатие на пункте, клик = увеличить, двойной = уменьшить, долгое — выход.
+  bool          _darktec_editing = false;
 #endif
   int           _pm_clock_mode  = 1;   // 0=all msgs switch screen, 1=PM inline only
 
@@ -497,7 +500,23 @@ public:
 #else
       if (i == 4) return _TR("[ Exit ]", "[ Выход ]");
 #endif
-    } else if (i == 0) {
+    }
+#ifdef UI_DARKTEC_SETTINGS
+    else if (page == SettingsPage::DARKTEC_PAGE) {
+      // Своя строка выхода внизу списка (как в официалке): i==5 — "Back",
+      // пункты — i==0..4. Без стрелки: курсор ">" рядом с "<" сливается.
+      if (i == 5) return "Back";
+      if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
+        return _darktec_note;
+      }
+      if (i == 0) return "Capacity, mAh";
+      if (i == 1) return "Batt type";
+      if (i == 2) return "Cells";
+      if (i == 3) return "Radio mod";
+      if (i == 4) return "Charge, mA";
+    }
+#endif
+    else if (i == 0) {
       return _TR("< Back", "< Назад");
     }
 
@@ -553,7 +572,11 @@ public:
   }
 
   bool getSettingValue(SettingsPage page, int i, char* val, size_t val_len) const {
+#ifdef UI_DARKTEC_SETTINGS
+    if (page == SettingsPage::ROOT || (i == 0 && page != SettingsPage::DARKTEC_PAGE)) return false;
+#else
     if (page == SettingsPage::ROOT || i == 0) return false;
+#endif
 
     if (page == SettingsPage::CHAT) {
       if (i == 1) {
@@ -672,18 +695,26 @@ public:
 #ifdef UI_DARKTEC_SETTINGS
     if (page == SettingsPage::DARKTEC_PAGE) {
       const DarktecPrefs::Settings& s = DarktecPrefs::get();
-      if (i == 1) {
-        snprintf(val, val_len, "%u", (unsigned)s.capacity_mah);
-      } else if (i == 2) {
+      char raw[12] = "";
+      if (i == 0) {
+        snprintf(raw, sizeof(raw), "%u", (unsigned)s.capacity_mah);
+      } else if (i == 1) {
         static const char* chem_names[3] = { "Li-ion", "LiFePO4", "LTO" };
-        snprintf(val, val_len, "%s", chem_names[s.chem < 3 ? s.chem : 0]);
+        snprintf(raw, sizeof(raw), "%s", chem_names[s.chem < 3 ? s.chem : 0]);
+      } else if (i == 2) {
+        snprintf(raw, sizeof(raw), "%uS", (unsigned)s.cells);
       } else if (i == 3) {
-        snprintf(val, val_len, "%uS", (unsigned)s.cells);
-      } else if (i == 4) {
         static const char* mod_names[4] = { "HT-RA62", "E22-30S", "E22P-868", "E22-33S" };
-        snprintf(val, val_len, "%s", mod_names[s.module < 4 ? s.module : 1]);
-      } else if (i == 5) {
-        snprintf(val, val_len, "%u", (unsigned)s.charge_ma);
+        snprintf(raw, sizeof(raw), "%s", mod_names[s.module < 4 ? s.module : 1]);
+      } else if (i == 4) {
+        snprintf(raw, sizeof(raw), "%u", (unsigned)s.charge_ma);
+      }
+      if (raw[0]) {
+        if (_darktec_editing && _settings_sel == i) {
+          snprintf(val, val_len, "[%s]", raw);   // маркер режима правки
+        } else {
+          snprintf(val, val_len, "%s", raw);
+        }
       }
       return true;
     }
@@ -705,7 +736,12 @@ public:
 #else
       else if (i == 4) { _in_settings = false; return; }
 #endif
+#ifdef UI_DARKTEC_SETTINGS
+      // У Darktec-страницы пункты начинаются с i==0 ("Back" внизу списка).
+      _settings_sel = (_settings_page == SettingsPage::DARKTEC_PAGE) ? 0 : 1;
+#else
       _settings_sel = 1;
+#endif
       _settings_scroll = 0;
       while (_settings_sel < settingsPageItemCount(_settings_page) && isSettingHidden(_settings_page, _settings_sel)) {
         _settings_sel++;
@@ -713,7 +749,12 @@ public:
       return;
     }
 
+#ifdef UI_DARKTEC_SETTINGS
+    if (i == 0 && page != SettingsPage::DARKTEC_PAGE) {
+      // У Darktec-страницы своя "Back" внизу (i==5), пункты — с i==0.
+#else
     if (i == 0) {
+#endif
       if (page == SettingsPage::CODECS) {
         _settings_page = SettingsPage::SYSTEM;
         _settings_sel = 3;
@@ -726,7 +767,7 @@ public:
         else if (prev == SettingsPage::COMMS) _settings_sel = 2;
         else if (prev == SettingsPage::SYSTEM) _settings_sel = 3;
 #ifdef UI_DARKTEC_SETTINGS
-        else if (prev == SettingsPage::DARKTEC_PAGE) _settings_sel = 4;
+        else if (prev == SettingsPage::DARKTEC_PAGE) { _settings_sel = 4; _darktec_editing = false; }
 #endif
         _settings_scroll = 0;
       }
@@ -845,40 +886,49 @@ public:
     // Darktec (spec 0001, FR-8..11): правка /darktec.prefs, шаг ±100,
     // на краях диапазона — переход на противоположный край. Химия/ячейки/
     // модуль применяются после перезагрузки (D-8) — заметка на строке.
+    // "Back" — последняя строка (i==5), возврат в корень настроек.
     if (page == SettingsPage::DARKTEC_PAGE) {
       DarktecPrefs::Settings s = DarktecPrefs::get();
-      if (i == 1) {
+      if (i == 0) {
         int cap = (int)s.capacity_mah + (fwd ? 100 : -100);
         if (cap > (int)DarktecPrefsFormat::kCapacityMax) cap = (int)DarktecPrefsFormat::kCapacityMin;
         if (cap < (int)DarktecPrefsFormat::kCapacityMin) cap = (int)DarktecPrefsFormat::kCapacityMax;
         s.capacity_mah = (uint16_t)cap;
-      } else if (i == 2) {
+      } else if (i == 1) {
         s.chem = (s.chem + (fwd ? 1 : 2)) % 3;
         if (s.chem != DarktecPrefsFormat::CHEM_LTO && s.cells > 1) {
           s.cells = 1;   // 2S доступна только для LTO — сброс с предупреждением (FR-10)
-          darktecNote(3, "cells: 1 (2S=LTO)");
+          darktecNote(2, "cells: 1 (2S=LTO)");
         } else {
-          darktecNote(2, "after reboot");
+          darktecNote(1, "after reboot");
         }
-      } else if (i == 3) {
+      } else if (i == 2) {
         if (s.cells == 2) {
           s.cells = 1;
-          darktecNote(3, "after reboot");
+          darktecNote(2, "after reboot");
         } else if (s.chem == DarktecPrefsFormat::CHEM_LTO) {
           s.cells = 2;
-          darktecNote(3, "after reboot");
+          darktecNote(2, "after reboot");
         } else {
-          darktecNote(3, "2S: LTO only");
+          darktecNote(2, "2S: LTO only");
           return;
         }
-      } else if (i == 4) {
+      } else if (i == 3) {
         s.module = (s.module + (fwd ? 1 : 3)) % 4;
-        darktecNote(4, "after reboot");
-      } else if (i == 5) {
+        darktecNote(3, "after reboot");
+      } else if (i == 4) {
         int ma = (int)s.charge_ma + (fwd ? 100 : -100);
         if (ma > (int)DarktecPrefsFormat::kChargeMax) ma = (int)DarktecPrefsFormat::kChargeMin;
         if (ma < (int)DarktecPrefsFormat::kChargeMin) ma = (int)DarktecPrefsFormat::kChargeMax;
         s.charge_ma = (uint16_t)ma;
+      } else if (i == 5) {
+        // Back — возврат в корень настроек (тот же переход, что у общей
+        // строки i==0 на других подстраницах).
+        _settings_page = SettingsPage::ROOT;
+        _settings_sel = 4;
+        _settings_scroll = 0;
+        _darktec_editing = false;
+        return;
       } else {
         return;
       }
@@ -1682,6 +1732,46 @@ public:
     if (_page == HomePage::SETTINGS && _in_settings) {
       int total_n = settingsPageItemCount(_settings_page);
 
+#ifdef UI_DARKTEC_SETTINGS
+      // Страница Darktec: правка значения — отдельный режим (как в
+      // официалке). В правке: клик = увеличить, двойной (KEY_PREV) =
+      // уменьшить, долгое (KEY_ENTER) = выйти из правки. Вне правки
+      // долгое на пункте входит в правку, KEY_PREV двигает курсор вверх
+      // (а не выходит из подстраницы — у платы с одной кнопкой иначе
+      // вверх не добраться), выход только строкой "< Назад".
+      // ВАЖНО: handleInput — одна функция, generic-код ниже по тексту;
+      // «не обработано» — провал сквозь блок, не return false.
+      if (_settings_page == SettingsPage::DARKTEC_PAGE) {
+        if (_darktec_editing) {
+          if (c == KEY_NEXT) {
+            onSettingPress(_settings_page, _settings_sel, true);
+            return true;
+          }
+          if (c == KEY_PREV) {
+            onSettingPress(_settings_page, _settings_sel, false);
+            return true;
+          }
+          if (c == KEY_ENTER) {
+            _darktec_editing = false;
+            return true;
+          }
+          return true;  // в правке остальное глотаем
+        }
+        if (c == KEY_ENTER && _settings_sel < total_n - 1) {
+          _darktec_editing = true;   // долгое на пункте — правка значения
+          return true;
+        }
+        if (c == KEY_PREV) {
+          // двойной = курсор вверх (generic KEY_PREV вышел бы из подстраницы)
+          _settings_sel = (_settings_sel + total_n - 1) % total_n;
+          while (isSettingHidden(_settings_page, _settings_sel)) _settings_sel = (_settings_sel + total_n - 1) % total_n;
+          if (_settings_sel < _settings_scroll) _settings_scroll = _settings_sel;
+          return true;
+        }
+        // KEY_NEXT (вниз) и KEY_ENTER на "Back" (i==5) проваливаются в generic
+      }
+#endif
+
       // ● long (KEY_CANCEL) or KEY_PREV = exit subpage or settings
       if (c == KEY_CANCEL || c == KEY_PREV) {
         if (_settings_page == SettingsPage::CODECS) {
@@ -1696,7 +1786,7 @@ public:
           else if (prev == SettingsPage::COMMS) _settings_sel = 2;
           else if (prev == SettingsPage::SYSTEM) _settings_sel = 3;
 #ifdef UI_DARKTEC_SETTINGS
-          else if (prev == SettingsPage::DARKTEC_PAGE) _settings_sel = 4;
+          else if (prev == SettingsPage::DARKTEC_PAGE) { _settings_sel = 4; _darktec_editing = false; }
 #endif
           _settings_scroll = 0;
         } else {
