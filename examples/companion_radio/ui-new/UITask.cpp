@@ -2187,6 +2187,19 @@ public:
 #endif
       return true;
     }
+#if UI_NOISE_PAGE == 1 && defined(UI_DARKTEC_SETTINGS)
+    // Долгое нажатие на экране шума листает скорость дорожки, не уходя с
+    // экрана: то же значение, что и пункт NF Speed в подменю [ Darktec ].
+    if (c == KEY_ENTER && _page == HomePage::NOISE) {
+      DarktecPrefsFormat::Settings s = DarktecPrefs::get();
+      s.noise_idx = (uint8_t)((s.noise_idx + 1) % DarktecPrefsFormat::kNoiseCount);
+      DarktecPrefs::save(s);
+      char msg[24];
+      snprintf(msg, sizeof(msg), "NF Speed: %dms", NOISE_SPEED_MS[s.noise_idx]);
+      _task->showAlert(msg, 2000);
+      return true;
+    }
+#endif
 #ifndef WITH_WIFI_SWITCHING
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
