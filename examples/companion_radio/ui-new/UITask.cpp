@@ -831,14 +831,14 @@ public:
       const DarktecPrefs::Settings& s = DarktecPrefs::get();
       char raw[20] = "";
       if (i == 0) {
-        // Ёмкость пакета: UserPref (значение из прошивальщика) либо
-        // фиксированные 3000/4000 мАч. Клик листает три варианта.
-        if (s.capacity_mode == DarktecPrefsFormat::CAP_3000) {
-          snprintf(raw, sizeof(raw), "3000 mAh");
-        } else if (s.capacity_mode == DarktecPrefsFormat::CAP_4000) {
+        // Ёмкость: 4000 → 3000 → пользовательская. Пользовательская
+        // показывается тем числом, которое задал прошивальщик.
+        if (s.capacity_mode == DarktecPrefsFormat::CAP_4000) {
           snprintf(raw, sizeof(raw), "4000 mAh");
+        } else if (s.capacity_mode == DarktecPrefsFormat::CAP_3000) {
+          snprintf(raw, sizeof(raw), "3000 mAh");
         } else {
-          snprintf(raw, sizeof(raw), "UserPref %u", (unsigned)s.capacity_mah);
+          snprintf(raw, sizeof(raw), "%u mAh", (unsigned)s.capacity_mah);
         }
       } else if (i == 1) {
         static const char* on_names[DarktecPrefsFormat::kAutoOffCount] = { "15s", "30s", "1m", "5m", "1h" };
@@ -1033,9 +1033,11 @@ public:
     if (page == SettingsPage::DARKTEC_PAGE) {
       DarktecPrefs::Settings s = DarktecPrefs::get();
       if (i == 0) {
-        // UserPref → 3000 → 4000 → UserPref. Модель сразу получает ту
+        // 4000 → 3000 → пользовательская → 4000. Модель сразу получает ту
         // ёмкость, которая выбрана: от неё считаются остаток и ETA.
-        s.capacity_mode = (uint8_t)((s.capacity_mode + 1) % DarktecPrefsFormat::kCapacityModeCount);
+        const uint8_t n = DarktecPrefsFormat::kCapacityModeCount;
+        s.capacity_mode = (uint8_t)(fwd ? (s.capacity_mode + n - 1) % n
+                                        : (s.capacity_mode + 1) % n);
         board.setBatteryCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(s));
       } else if (i == 1) {
         const uint8_t n = DarktecPrefsFormat::kAutoOffCount;
