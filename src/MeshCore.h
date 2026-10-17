@@ -74,6 +74,11 @@ public:
   // Draw of the fitted radio module while transmitting, pushed in by the UI when
   // the user picks a module. Boards that model their runtime use it directly.
   virtual void setTxCurrentMa(float ma) { /* no op */ }
+  // Fitted radio module on boards whose RF front end can be rerouted at runtime.
+  // Darktec carries both E22 (pin 6 = RXEN) and E22P (pin 6 = EN) on one build,
+  // so the choice is a setting, not a compile flag. Returns false if unsupported.
+  virtual bool setRadioModule(uint8_t idx) { return false; }
+  virtual int8_t getRadioModule() const { return -1; }
   virtual uint32_t getIRQGpio() { return -1; } // not supported. Returns DIO1 (SX1262) and DIO0 (SX127x)
   virtual void sleep(uint32_t secs)  { /* no op */ }
   virtual uint32_t getGpio() { return 0; }

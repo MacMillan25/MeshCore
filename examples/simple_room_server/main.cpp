@@ -87,6 +87,11 @@ void setup() {
 
   the_mesh.begin(fs);
 
+#if defined(DARKTEC)
+  // Модуль из настроек применяется после загрузки prefs (см. target.h).
+  darktec_apply_saved_radio_module(the_mesh.getNodePrefs()->ui_radio_module_idx);
+#endif
+
 #ifdef DISPLAY_CLASS
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
 #endif

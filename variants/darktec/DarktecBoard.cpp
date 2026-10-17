@@ -100,17 +100,26 @@ void DarktecBoard::begin() {
     digitalWrite(SX126X_POWER_EN, HIGH);
     delay(10);   // дать sx1262 время на включение
 
-    // E22P: EN модуля — жёстко высокий, вне всяких библиотек. RadioLib этот пин
-    // не знает (SX126X_RXEN/TXEN не заданы), поэтому уронить его на передаче
-    // больше некому. Выставляем здесь, до radio_init(): begin() вызывается
-    // раньше, чем радио вообще инициализируется.
-    // У E22 пина EN нет: там нога 6 это RXEN, и ей управляет RadioLib.
-#ifdef SX126X_EN_PIN
-    pinMode(SX126X_EN_PIN, OUTPUT);
-    digitalWrite(SX126X_EN_PIN, HIGH);
-#endif
+    // Пин 6 модуля (P0.17): до настройки модуля держим высоким. Для E22 это
+    // RXEN в состоянии приёма, для E22P — EN тракта. RadioLib этот пин пока не
+    // знает (SX126X_RXEN/TXEN не заданы), поэтому уронить его некому до того,
+    // как darktec_radio_set_rf() выдаст окончательную конфигурацию.
+    pinMode(DARKTEC_RF_SWITCH_PIN, OUTPUT);
+    digitalWrite(DARKTEC_RF_SWITCH_PIN, HIGH);
 
     readInaShuntReady();
+}
+
+// Переключение впаянного модуля на лету. Порядок индексов тот же, что у модели
+// питания и у строки настроек "Radio Mod": 0=33S, 1=30S, 2=RA62, 3=E22P.
+bool DarktecBoard::setRadioModule(uint8_t idx) {
+  if (idx > 3) {
+    return false;
+  }
+  _radio_module = idx;
+  _pm.setModule(idx);
+  darktec_radio_set_rf(idx);
+  return true;
 }
 
 // Opens the INA3221 on first use and makes sure every channel we read has the

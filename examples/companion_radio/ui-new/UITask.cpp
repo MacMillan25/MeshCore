@@ -1460,7 +1460,7 @@ public:
                            constrain(_node_prefs->ui_batt_capacity_idx, 0, 1)]);
             } else if (i == SETTINGS_RADIO_IDX && _node_prefs) {
               snprintf(val, sizeof(val), "%s", RADIO_MODULE_LABEL[
-                           constrain(_node_prefs->ui_radio_module_idx, 0, 2)]);
+                           constrain(_node_prefs->ui_radio_module_idx, 0, RADIO_MODULE_COUNT - 1)]);
 #endif
             } else if (i == SETTINGS_ROT_IDX && _node_prefs) {
               static const char* rot_vals[4] = { "0", "90", "180", "270" };
@@ -1647,7 +1647,9 @@ public:
           idx = fwd ? (idx + 1) % RADIO_MODULE_COUNT
                     : (idx + RADIO_MODULE_COUNT - 1) % RADIO_MODULE_COUNT;
           _node_prefs->ui_radio_module_idx = idx;
-          board.setModule((uint8_t)idx);
+          // Не только ETA: у E22P пин 6 это EN и его надо отдать вручную,
+          // у E22/30S/RA62 — вернуть библиотеке. Метод делает и то, и другое.
+          board.setRadioModule((uint8_t)idx);
           the_mesh.savePrefs();
 #endif
 #ifdef WITH_COMPANION_CLI

@@ -26,8 +26,36 @@ AutoDiscoverRTCClock rtc_clock(fallback_clock);
 bool radio_init() {
   rtc_clock.begin(Wire);
 
-  // EN модуля уже поднят в DarktecBoard::begin() и библиотеке не подчиняется.
-  return radio.std_init(&SPI);
+  if (!radio.std_init(&SPI)) {
+    return false;
+  }
+
+  // До загрузки prefs радио должно работать хоть как-то, поэтому сначала
+  // ставим модуль по умолчанию. Сохранённый в настройках применяется позже,
+  // из darktec_apply_saved_radio_module().
+  board.setRadioModule(DARKTEC_RADIO_DEFAULT_MODULE);
+  return true;
+}
+
+// Пин 6 модуля (P0.17) у разных модулей означает разное:
+//   E22-900M33S / M30S / HT-RA62 — RXEN, им управляет RadioLib: на передаче 0,
+//                                  в приёме 1;
+//   E22P-868M30S               — EN, общий включатель тракта. RadioLib его не
+//                                  должен трогать: на передаче он опустил бы
+//                                  ногу в 0 и выключил усилитель.
+// Поэтому для E22P RF-ключ отключается совсем, а нога держится высоким.
+void darktec_radio_set_rf(uint8_t module_idx) {
+  if (module_idx == DARKTEC_MODULE_E22P) {
+    radio.setRfSwitchPins(RADIOLIB_NC, RADIOLIB_NC);
+  } else {
+    radio.setRfSwitchPins(DARKTEC_RF_SWITCH_PIN, RADIOLIB_NC);
+  }
+  pinMode(DARKTEC_RF_SWITCH_PIN, OUTPUT);
+  digitalWrite(DARKTEC_RF_SWITCH_PIN, HIGH);
+}
+
+void darktec_apply_saved_radio_module(uint8_t module_idx) {
+  board.setRadioModule(module_idx);
 }
 
 mesh::LocalIdentity radio_new_identity() {

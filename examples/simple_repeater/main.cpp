@@ -110,6 +110,13 @@ void setup() {
 
   the_mesh.begin(fs);
 
+#if defined(DARKTEC)
+  // Модуль из настроек применяется после загрузки prefs: до этого радио живёт
+  // на DARKTEC_RADIO_DEFAULT_MODULE. Для E22P это поднимает EN и отключает
+  // RF-ключ RadioLib, для E22/30S/RA62 — возвращает RXEN под библиотеку.
+  darktec_apply_saved_radio_module(the_mesh.getNodePrefs()->ui_radio_module_idx);
+#endif
+
 #ifdef DISPLAY_CLASS
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
 #endif

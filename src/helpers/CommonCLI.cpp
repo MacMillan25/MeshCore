@@ -505,6 +505,19 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     _prefs->multi_acks = atoi(&config[11]);
     savePrefs();
     strcpy(reply, "OK");
+  } else if (memcmp(config, "radio.module ", 13) == 0) {
+    // Платы с переключаемым RF-трактом (Darktec) меняют модуль на лету:
+    // 0=33S, 1=30S, 2=RA62 (пин 6 = RXEN) и 3=E22P (пин 6 = EN).
+    int idx = atoi(&config[13]);
+    if (idx < 0 || idx >= 4) {
+      strcpy(reply, "ERROR: module must be 0-3");
+    } else if (!_board->setRadioModule((uint8_t)idx)) {
+      strcpy(reply, "ERROR: board has no selectable module");
+    } else {
+      _prefs->ui_radio_module_idx = (uint8_t)idx;
+      savePrefs();
+      sprintf(reply, "OK - module %d", idx);
+    }
   } else if (memcmp(config, "allow.read.only ", 16) == 0) {
     _prefs->allow_read_only = memcmp(&config[16], "on", 2) == 0;
     savePrefs();
@@ -847,6 +860,10 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     sprintf(reply, "> %d", ((uint32_t) _prefs->agc_reset_interval) * 4);
   } else if (memcmp(config, "multi.acks", 10) == 0) {
     sprintf(reply, "> %d", (uint32_t) _prefs->multi_acks);
+  } else if (memcmp(config, "radio.module", 12) == 0) {
+    // 0=33S, 1=30S, 2=RA62, 3=E22P. На железе без переключаемого тракта
+    // возвращаем сохранённое значение, оно всё равно ни на что не влияет.
+    sprintf(reply, "> %d", (uint32_t) _prefs->ui_radio_module_idx);
   } else if (memcmp(config, "allow.read.only", 15) == 0) {
     sprintf(reply, "> %s", _prefs->allow_read_only ? "on" : "off");
   } else if (memcmp(config, "flood.advert.interval", 21) == 0) {

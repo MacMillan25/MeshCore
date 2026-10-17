@@ -184,6 +184,11 @@ void setup() {
   #error "need to define filesystem"
 #endif
 
+#if defined(DARKTEC)
+  // Модуль из настроек применяется после загрузки prefs (см. target.h).
+  darktec_apply_saved_radio_module(the_mesh.getNodePrefs()->ui_radio_module_idx);
+#endif
+
 // add bluetooth interface
 #if defined(BLE_PIN_CODE)
   bluetooth_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
