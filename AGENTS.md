@@ -102,22 +102,22 @@
 
 ### CLI для конфигуратора (прошивальщика)
 
-Через USB-serial (`set` работает при `sender_timestamp == 0`):
+Команды принимаются по USB. **Компаньон** разбирает CLI сам (`MyMesh::handleCommand`) и до `CommonCLI` не доходит, поэтому команды DarkTec живут в `DarktecBoard::handleCommand` — там их видят все роли.
 
 ```
-set name MyNode          # имя ноды; пустое не отправлять — останется прежнее
-set freq 869.900         # частота, МГц
-set bw 62.5              # полоса, кГц
-set sf 8                 # spreading factor 5..12
-set cr 8                 # coding rate 5..8
-set tx 22                # мощность -9..22 dBm
-set adc.multiplier 1.750 # коэффициент АЦП
-set radio.module 0..3    # модуль; 0=33S, 1=30S, 2=RA62, 3=E22P
-set darktec.capacity 4500           # UserPref-ёмкость 1000..10000, режим → UserPref
+set radio 869.900,62.5,8,6   # канал сети одной строкой: частота, полоса, SF, CR
+set tx 22                    # мощность -9..22 dBm
+set adc.multiplier 1.750     # коэффициент АЦП
+set radio.module 0..3        # модуль; 0=33S, 1=30S, 2=RA62, 3=E22P
+get radio.module             # проверить, что записалось
+set darktec.capacity 4500           # пользовательская ёмкость 1000..10000, режим → UserPref
 set darktec.capmode user|3000|4000  # режим ёмкости
+reboot                       # применить частоту/полосу/SF/CR
 ```
 
-`freq/bw/sf/cr/tx` применяются после перезагрузки (`OK - reboot to apply`); `radio.module` и ёмкость — сразу.
+`set name` — в `MyMesh` (компаньон) и `CommonCLI` (остальные). `radio`/`tx` — в `CommonRadioPrefs`, применяются после `reboot`. `radio.module` и ёмкость — сразу и сохраняются в `/darktec.prefs`.
+
+**Как прошивальщик общается с нодой:** компаньон — бинарными кадрами (`<` + len16 + payload, payload[0]=66 `CMD_RUN_CLI_COMMAND`, ответ `>` + len16 + payload[0]=29), остальные роли — обычным текстом. Перед отправкой полезно спросить `ver` и найти порт по ответу: на компьютере может быть чужая nRF52 с тем же VID `0x239A`/`0x1915`.
 
 ### Где что лежит
 
@@ -322,7 +322,9 @@ sensor list                            ->  RELAY=... (и прочие настр
 
 ## Версия и база
 
-- Прошивка — **1.18.0** (beeline09 `south_edition`, `83f2b0b4`), рабочая ветка — `feat/darktec-e22p` (историю переписали force-push'ем при переносе на новую базу).
+- Прошивка — **1.18.0d2** (beeline09 `south_edition`, `83f2b0b4`), рабочая ветка — `feat/darktec-e22p` (историю переписали force-push'ем при переносе на новую базу).
+- **Версионность:** база остаётся `1.18.0`, наши выпуски — с суффиксом `d`: `1.18.0d1`, `1.18.0d2`, … Суффикс `d` отличает наши сборки от `b`-сборок beeline. Версия живёт в `examples/*/MyMesh.h` (`FIRMWARE_VERSION`), скрипт `build-darktec-uf2.ps1` понимает суффикс и кладёт `out\uf2\<env>-v1.18.0d2-<дата>.uf2`.
+- **Релизы прошивки** — в `MacMillan25/MeshCore`, теги `darktec-v1.18.0dN`, ассеты `<env>.uf2` (8 ролей). Прошивальщик берёт список через GitHub API и качает по выбранной версии.
 - Поверх базы перенесены наши фичи с 1.17.1: экраны шума/INA/батареи, подменю `[ Darktec ]`, реле T2, `set radio.module`, наша модель SOC/ETA и заставка. Его `DarktecSoc*`/ETA удалены.
 - Старая ветка 1.17.1 сохранена тегом `backup/darktec-1.17.1-final` (`c24f7583`) — при нужде достаётся одной командой.
 - PR #35 (beeline09 `south_edition`) обновляется пушем этой ветки в `feat/darktec-e22p`.
