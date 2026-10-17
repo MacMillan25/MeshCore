@@ -1445,7 +1445,9 @@ public:
       const int head_h = line_h;
       const int row_h = line_h;
 
-      const int col_label_x = 1;
+      // Метки BATT/CHRG отступают от левой рамки: вплотную к линии буквы
+      // слипаются с ней и читаются тяжелее.
+      const int col_label_x = 3;
       const int col_v_x = 40, col_v_w = 32;
       const int col_a_x = 72, col_a_w = 28;
       const int col_w_x = 100, col_w_w = display.width() - 100 - 1;
