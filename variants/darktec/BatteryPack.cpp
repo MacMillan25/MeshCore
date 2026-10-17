@@ -1,10 +1,7 @@
-// Оверлей helpers/BatteryPack.cpp для варианта Darktec (spec 0001, FR-25).
-// API тот же, что у ядра; отличие: getPercent(pack_mv) возвращает SOC из
-// модели DarktecSocModel (кулонометр + таблица замера + R-компенсация),
-// а не из generic-таблицы ядра. Ядро при апдейте сюда не «приносит» свои
-// таблицы — состояние питания Darktec живёт в DarktecBoard.cpp
-// (DarktecPowerState). Износ: при изменении API ядра этот файл правим
-// осознанно (см. spec 0001, NFR-2).
+// Оверлей helpers/BatteryPack.cpp для варианта Darktec.
+// API тот же, что у ядра; отличие: SOC берётся из НАШЕЙ модели питания
+// (DarktecPowerModel: кривая разряда, R-компенсация заряда, авто-полярность),
+// а не из generic-таблицы ядра. Фасад — DarktecPowerState (DarktecBoard.cpp).
 
 #include <helpers/BatteryPack.h>
 
@@ -12,33 +9,23 @@
   #include <Arduino.h>
 #endif
 
-#include "DarktecPrefs.h"
-#include "DarktecSocModel.h"
+#include "battery_chemistry.h"
 #include "DarktecPowerState.h"
-#include "DarktecSoc.h"
 
 namespace {
 
-// Не используемые Darktec химии — копия таблиц ядра (совместимость API).
-// Descending voltage. 1S cell mV → %.
-const BatteryOcvPoint kNiMH[] = {
-  {1400, 100}, {1350, 90}, {1300, 70}, {1250, 40},
-  {1200,  20}, {1100, 10}, {1000,  0},
-};
-const BatteryOcvPoint kLeadAcid[] = {
-  {2150, 100}, {2100, 90}, {2050, 70}, {2000, 40},
-  {1950,  20}, {1900, 10}, {1800,  0},
-};
+uint8_t linearPercent(uint16_t pack_mv, uint8_t cells) {
+  cells = cells < 1 ? 1 : cells;
+  const uint32_t cell_mv = pack_mv / cells;
+  constexpr uint32_t kMin = 3000, kMax = 4200;
+  if (cell_mv >= kMax) return 100;
+  if (cell_mv <= kMin) return 0;
+  return (uint8_t)((cell_mv - kMin) * 100 / (kMax - kMin));
+}
 
 uint8_t seriesCellsOrDefault(uint8_t series_cells) {
   uint8_t cells = series_cells ? series_cells : (uint8_t)BATT_SERIES_CELLS;
   return cells < 1 ? 1 : cells;
-}
-
-// SOC по нашим таблицам (DarktecSoc) для поддерживаемых химий.
-uint8_t darktecPercent(uint16_t pack_mv, DarktecSoc::Chem chem, uint8_t cells) {
-  const uint16_t cell_mv = (uint16_t)(pack_mv / (cells < 1 ? 1 : cells));
-  return DarktecSoc::socFromCellMv(chem, cell_mv);
 }
 
 }  // namespace
@@ -46,9 +33,8 @@ uint8_t darktecPercent(uint16_t pack_mv, DarktecSoc::Chem chem, uint8_t cells) {
 namespace BatteryPack {
 
 const BatteryProfile& profileFor(BatteryChemistry chem) {
-  // Профили нужны только для совместимости API (никто вне ядра не вызывает).
-  // Отдаём статический пустой профиль — реальный расчёт идёт через
-  // DarktecSoc/DarktecPowerState (см. getPercent ниже).
+  // Профили нужны только для совместимости API ядра; реальный расчёт —
+  // в DarktecPowerState/DarktecPowerModel.
   static const BatteryProfile empty{BatteryChemistry::Custom, 1, nullptr, 0};
   (void)chem;
   return empty;
@@ -59,70 +45,27 @@ const BatteryProfile& activeProfile() {
 }
 
 uint8_t getPercent(uint16_t pack_mv, BatteryChemistry chem, uint8_t series_cells) {
-  const uint8_t cells = seriesCellsOrDefault(series_cells);
-  switch (chem) {
-    case BatteryChemistry::Lithium:
-      return darktecPercent(pack_mv, DarktecSoc::Chem::LiIon, cells);
-    case BatteryChemistry::LiFePO4:
-      return darktecPercent(pack_mv, DarktecSoc::Chem::LiFePO4, cells);
-    case BatteryChemistry::NiMH: {
-      // Ядро-таблица (в darktec-ролях не используется).
-      static const BatteryOcvPoint pts[] = {
-        {1400, 100}, {1350, 90}, {1300, 70}, {1250, 40},
-        {1200,  20}, {1100, 10}, {1000,  0},
-      };
-      const uint16_t cell_mv = (uint16_t)(pack_mv / cells);
-      if (cell_mv >= pts[0].mv) return 100;
-      if (cell_mv <= pts[6].mv) return 0;
-      for (uint8_t i = 0; i + 1 < 7; i++) {
-        if (cell_mv <= pts[i].mv && cell_mv >= pts[i + 1].mv) {
-          return (uint8_t)(pts[i + 1].pct +
-                           ((uint32_t)(cell_mv - pts[i + 1].mv) * (pts[i].pct - pts[i + 1].pct)) /
-                               (pts[i].mv - pts[i + 1].mv));
-        }
-      }
-      return 0;
-    }
-    case BatteryChemistry::LeadAcid: {
-      static const BatteryOcvPoint pts[] = {
-        {2150, 100}, {2100, 90}, {2050, 70}, {2000, 40},
-        {1950,  20}, {1900, 10}, {1800,  0},
-      };
-      const uint16_t cell_mv = (uint16_t)(pack_mv / cells);
-      if (cell_mv >= pts[0].mv) return 100;
-      if (cell_mv <= pts[6].mv) return 0;
-      for (uint8_t i = 0; i + 1 < 7; i++) {
-        if (cell_mv <= pts[i].mv && cell_mv >= pts[i + 1].mv) {
-          return (uint8_t)(pts[i + 1].pct +
-                           ((uint32_t)(cell_mv - pts[i + 1].mv) * (pts[i].pct - pts[i + 1].pct)) /
-                               (pts[i].mv - pts[i + 1].mv));
-        }
-      }
-      return 0;
-    }
-    default:
-      return darktecPercent(pack_mv, DarktecSoc::Chem::LiIon, cells);
+  // Кривая DarkTec снята для Li-ion 1S; для прочих химий/ячеек — линейная
+  // оценка, чтобы API остался работоспособным.
+  if (chem == BatteryChemistry::Lithium && seriesCellsOrDefault(series_cells) == 1) {
+    return DarktecPowerState::socPercent(pack_mv);
   }
+  return linearPercent(pack_mv, seriesCellsOrDefault(series_cells));
 }
 
 uint8_t getPercent(uint16_t pack_mv, BatteryChemistry chem) {
   return getPercent(pack_mv, chem, 0);
 }
 
-// Активный путь (экран/телеметрия юга): SOC из модели питания Darktec.
+// Активный путь (иконка батареи, телеметрия): SOC нашей модели питания.
 uint8_t getPercent(uint16_t pack_mv) {
   return DarktecPowerState::socPercent(pack_mv);
 }
 
 uint16_t fullMilliVolts() {
-  // Верхняя точка таблицы активной химии × ячейки (химия — из настроек).
-  const auto& prefs = DarktecPrefs::get();
-  const DarktecSoc::Chem chem =
-      (prefs.chem == DarktecPrefsFormat::CHEM_LIFEPO4) ? DarktecSoc::Chem::LiFePO4
-      : (prefs.chem == DarktecPrefsFormat::CHEM_LTO)   ? DarktecSoc::Chem::LTO
-                                                       : DarktecSoc::Chem::LiIon;
-  const uint16_t top = DarktecSocModel::fullCellMv(chem);
-  return (uint16_t)(top * (prefs.cells < 1 ? 1 : prefs.cells));
+  // Верхняя точка пакета для нашей модели: BATTERY_CHEMISTRY задаёт её
+  // в battery_chemistry.h (Li-ion 4200, LiFePO4 3650, LTO 2500).
+  return (uint16_t)BATT_MAX_MILLIVOLTS;
 }
 
 // ---- Кэш напряжения пакета (INA-подпитка) — поведение ядра, 1:1 ----
@@ -148,7 +91,6 @@ void setClockMs(uint32_t (*clock_ms)()) { s_clock_ms = clock_ms; }
 void setClockMsValue(uint32_t ms) { s_test_clock_ms = ms; }
 
 void notePackMilliVolts(uint16_t mv) {
-  // Игнорируем очевидный мусор (обрыв / КЗ / чужая шина).
   if (mv < 500 || mv > 20000) return;
   s_pack_mv = mv;
   s_pack_ms = nowMs();

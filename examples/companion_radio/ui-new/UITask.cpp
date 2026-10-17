@@ -66,6 +66,78 @@ static void utf8_truncate(char* s, int max_bytes) {
   #define UI_RECENT_LIST_SIZE 4
 #endif
 
+// ==== DarkTec: экраны и настройки, перенесённые с 1.17.1 ===================
+// Флаги UI_NO_<PAGE> прячут ядровые страницы, чтобы листание кнопкой
+// совпадало с 1.17.1: Recent, Bluetooth, Advert и GPS не показываем.
+#ifdef UI_NO_RECENT
+  #define UI_PAGE_RECENT     0
+#else
+  #define UI_PAGE_RECENT     1
+#endif
+#ifdef UI_NO_BLUETOOTH
+  #define UI_PAGE_BLUETOOTH  0
+#else
+  #define UI_PAGE_BLUETOOTH  1
+#endif
+#ifdef UI_NO_ADVERT
+  #define UI_PAGE_ADVERT     0
+#else
+  #define UI_PAGE_ADVERT     1
+#endif
+#if ENV_INCLUDE_GPS == 1 && !defined(UI_NO_GPS)
+  #define UI_PAGE_GPS        1
+#else
+  #define UI_PAGE_GPS        0
+#endif
+
+// Странице батареи нужна модель питания DarkTec — на других платах флаг
+// игнорируется, а не превращается в ошибку сборки.
+#if UI_BATT_PAGE == 1 && defined(DARKTEC)
+  #define UI_PAGE_BATT 1
+#else
+  #define UI_PAGE_BATT 0
+#endif
+
+#if UI_NOISE_PAGE == 1
+  // Дорожка шумового пола: 64 столбика по 2 px ровно на 128 px.
+  #define NOISE_SAMPLES        64
+  #define NOISE_SAMPLE_MILLIS  500
+  // Шаги скорости из подменю DarkTec (NF Speed), мс.
+  static const int NOISE_SPEED_MS[4] = { 100, 250, 500, 1000 };
+#endif
+
+// Входящее сообщение висит ровно столько и не больше.
+static const uint32_t MESSAGE_PREVIEW_MILLIS = 10000UL;
+
+// Сколько экран горит после последней активности. Выбирается в подменю
+// DarkTec (Screen on); AUTO_OFF_MILLIS остаётся запасным значением.
+static const uint32_t AUTO_OFF_MS[5] = {
+  15000UL, 30000UL, 60000UL, 300000UL, 3600000UL
+};
+static const char* const AUTO_OFF_LABEL[5] = {
+  "15s", "30s", "1m", "5m", "1h"
+};
+
+// Сколько держать экран: значение из подменю DarkTec (Screen on).
+static uint32_t autoOffMillis() {
+#if defined(DARKTEC) && defined(UI_DARKTEC_SETTINGS)
+  const uint8_t idx = DarktecPrefs::get().auto_off_idx;
+  return AUTO_OFF_MS[idx < 5 ? idx : 0];
+#else
+  return AUTO_OFF_MILLIS;
+#endif
+}
+
+// Номера LPP-каналов двух рельсов INA3221: батарея и зарядник.
+#ifndef INA_CHANNEL_BATT
+  #define INA_CHANNEL_BATT  4
+#endif
+#ifndef INA_CHANNEL_CHRG
+  #define INA_CHANNEL_CHRG  3
+#endif
+#define UI_INA_REFRESH_MS        1000
+
+
 #if UI_HAS_JOYSTICK || UI_HAS_ROTARY_INPUT
   #define PRESS_LABEL "press Enter"
   // On joystick boards a short SELECT click = KEY_ENTER; hibernation must require
@@ -110,11 +182,22 @@ static void formatDuration(char* buf, size_t len, uint32_t secs) {
     snprintf(buf, len, _TR("%uy %ud %uh %um", "%uг %uд %uч %uм"), y, d - y * 365, h % 24, m % 60);
 }
 
+// Optional marker appended to the version on the boot screen — a board
+// revision, a build counter, whatever identifies this particular binary.
+// Empty by default; set it with -D FIRMWARE_VERSION_SUFFIX=\"5b\".
+#ifndef FIRMWARE_VERSION_SUFFIX
+  #define FIRMWARE_VERSION_SUFFIX ""
+#endif
+
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
-  char _version_info[12];   // e.g. "v1.14.1"
-  char _commit_info[12];    // e.g. "#abc1234" or "" if no GIT_COMMIT
+  // Строки заставки держим раздельно: родительская версия, метка сборки и
+  // хеш коммита. Раньше версия с меткой и хеш печатались на 35 и 41 — при
+  // высоте строки 8 пикселей они налезали друг на друга.
+  char _base_version[12];   // "v1.17.1"
+  char _build_tag[8];       // "SE" / "E22P", пусто если метки нет
+  char _version_line[22];   // "v1.17.1 #dcd8b9b1" — версия и номер коммита
 
 public:
   SplashScreen(UITask* task) : _task(task) {
@@ -123,50 +206,64 @@ public:
 
     // version part: "v1.14.1"
     int len = dash ? dash - ver : strlen(ver);
-    if (len >= (int)sizeof(_version_info)) len = sizeof(_version_info) - 1;
-    memcpy(_version_info, ver, len);
-    _version_info[len] = 0;
+    if (len >= (int)sizeof(_base_version)) len = sizeof(_base_version) - 1;
+    memcpy(_base_version, ver, len);
+    _base_version[len] = 0;
 
-    // commit part: "#abc1234" (from the part after '-')
-    if (dash) {
-      _commit_info[0] = '#';
-      strncpy(_commit_info + 1, dash + 1, sizeof(_commit_info) - 2);
-      _commit_info[sizeof(_commit_info) - 1] = 0;
-    } else {
-      _commit_info[0] = 0;
+    // Append the marker, separated by a space. The separator is added here
+    // rather than carried in the flag: a space inside a -D value splits the
+    // compiler command line, so FIRMWARE_VERSION_SUFFIX stays a bare word.
+    const char* suffix = FIRMWARE_VERSION_SUFFIX;
+    int suflen = (int)strlen(suffix);
+    if (suflen > (int)sizeof(_build_tag) - 1) suflen = (int)sizeof(_build_tag) - 1;
+    if (suflen > 0) memcpy(_build_tag, suffix, suflen);
+    _build_tag[suflen] = 0;
+
+    // Строка версии: "v1.17.1 #dcd8b9b1".
+    //
+    // Номер коммита приходит из FIRMWARE_VERSION — его подставляет
+    // git_version.py перед сборкой (см. platformio.ini, pre:git_version.py).
+    // Если коммита нет, показываем метку сборки SE/E22P: она говорит только
+    // о радиомодуле, но это лучше, чем пустая строка.
+    strncpy(_version_line, _base_version, sizeof(_version_line) - 1);
+    _version_line[sizeof(_version_line) - 1] = 0;
+    int vlen = (int)strlen(_version_line);
+
+    if (dash && vlen < (int)sizeof(_version_line) - 3) {
+      _version_line[vlen++] = ' ';
+      _version_line[vlen++] = '#';
+      strncpy(_version_line + vlen, dash + 1, sizeof(_version_line) - 1 - vlen);
+      _version_line[sizeof(_version_line) - 1] = 0;
+    } else if (_build_tag[0] && vlen < (int)sizeof(_version_line) - 2) {
+      _version_line[vlen++] = ' ';
+      strncpy(_version_line + vlen, _build_tag, sizeof(_version_line) - 1 - vlen);
+      _version_line[sizeof(_version_line) - 1] = 0;
     }
 
     dismiss_after = millis() + BOOT_SCREEN_MILLIS;
   }
 
   int render(DisplayDriver& display) override {
-    // Orientation-aware layout: stack logo + text lines and centre the whole
-    // block vertically, so it looks balanced in both landscape and portrait.
-    const int W = display.width();
-    const int H = display.height();
-    const int logoW = 128, logoH = 13;
-    const int lh = display.getLineH(1);   // small-text line height
-
-    display.setTextSize(1);
-    int lines = 3 + (_commit_info[0] ? 1 : 0);   // website, version, date (+commit)
-    int blockH = logoH + 6 + lines * lh;
-    int y = (H - blockH) / 2;
-    if (y < 2) y = 2;
-
-    // meshcore logo (centered; clamp x so it never goes off-screen in portrait)
+    // meshcore logo
     display.setColor(UIColor::corp_blue);
-    int logoX = (W - logoW) / 2;
-    if (logoX < 0) logoX = 0;
-    display.drawXbm(logoX, y, meshcore_logo, logoW, logoH);
-    y += logoH + 6;
+    int logoWidth = 128;
+    display.drawXbm((display.width() - logoWidth) / 2, 3, meshcore_logo, logoWidth, 13);
 
+    // Наша марка вместо ссылки на meshcore.io.
     display.setColor(UIColor::primary_txt);
-    display.drawTextCentered(W / 2, y, "https://meshcore.io");  y += lh;
-    display.drawTextCentered(W / 2, y, _version_info);          y += lh;
-    if (_commit_info[0]) {
-      display.drawTextCentered(W / 2, y, _commit_info);         y += lh;
-    }
-    display.drawTextCentered(W / 2, y, FIRMWARE_BUILD_DATE);
+    display.setTextSize(1);
+    display.drawTextCentered(display.width() / 2, 20, "Dark Electronics");
+
+    // Родительская версия и номер коммита одной строкой — так обе влезают
+    // (21 символ при ширине символа 6 пикселей), и наложение исключено.
+    display.setColor(UIColor::primary_txt);
+    display.setTextSize(1);
+    display.drawTextCentered(display.width() / 2, 30, _version_line);
+
+    // Дата сборки — живая, её подставляет git_version.py перед сборкой.
+    display.setColor(UIColor::secondary_txt);
+    display.setTextSize(1);
+    display.drawTextCentered(display.width() / 2, 42, FIRMWARE_BUILD_DATE);
 
     return 1000;
   }
@@ -184,13 +281,18 @@ class HomeScreen : public UIScreen {
     FIRST,
     RECENT,
     RADIO,
-#ifndef WITH_WIFI_SWITCHING
+#if UI_NOISE_PAGE == 1
+    NOISE,     // живой график шумового пола
+#endif
+#if UI_INA_PAGE == 1
+    INA,       // INA3221: батарея и зарядник (V / A / W) + счётчик заряда
+#endif
+#if UI_PAGE_BATT
+    BATT,      // батарея: напряжение, остаток, ETA
+#endif
     BLUETOOTH,
-#endif
     ADVERT,
-#if ENV_INCLUDE_GPS == 1
     GPS,
-#endif
 #if UI_SENSORS_PAGE == 1
     SENSORS,
 #endif
@@ -204,6 +306,25 @@ class HomeScreen : public UIScreen {
     Count    // keep as last
   };
 
+  // Страницы, выключенные флагами (UI_NO_*), остаются в enum, чтобы не
+  // плодить #if вокруг их отрисовки, но листание и точки их пропускают.
+  static bool pageHidden(uint8_t p) {
+#if !UI_PAGE_RECENT
+    if (p == RECENT) return true;
+#endif
+#if !UI_PAGE_BLUETOOTH
+    if (p == BLUETOOTH) return true;
+#endif
+#if !UI_PAGE_ADVERT
+    if (p == ADVERT) return true;
+#endif
+#if !UI_PAGE_GPS
+    if (p == GPS) return true;
+#endif
+    (void)p;
+    return false;
+  }
+
   UITask* _task;
   mesh::RTCClock* _rtc;
   SensorManager* _sensors;
@@ -211,6 +332,29 @@ class HomeScreen : public UIScreen {
   uint8_t _page;
   bool _shutdown_init;
   int _clock_pm_pending;   // PMs queued for inline display on CLOCK page
+#if UI_NOISE_PAGE == 1
+  int16_t       noise_hist[NOISE_SAMPLES] = {};
+  uint8_t       noise_head = 0;          // next write slot
+  uint8_t       noise_count = 0;         // valid entries, grows to NOISE_SAMPLES
+  unsigned long next_noise_sample = 0;
+
+  // Oldest sample first: index 0 is the leftmost column on screen.
+  int noiseSampleAt(int i) const {
+    return noise_hist[(noise_head + NOISE_SAMPLES - noise_count + i) % NOISE_SAMPLES];
+  }
+
+  // Three-point moving average: the core already averages 64 RSSI reads, but
+  // hands over a fresh result only every calibration interval.
+  int noiseSmoothedAt(int i) const {
+    int sum = 0, n = 0;
+    for (int k = i - 1; k <= i + 1; k++) {
+      if (k < 0 || k >= noise_count) continue;
+      sum += noiseSampleAt(k);
+      n++;
+    }
+    return n ? (sum + n / 2) / n : 0;
+  }
+#endif
   AdvertPath recent[ADVERT_PATH_TABLE_SIZE];
 #if !(defined(UI_NO_DISCOVER_SCREEN) && (UI_NO_DISCOVER_SCREEN + 0 != 0))
   DiscoveredNode discovered[UI_RECENT_LIST_SIZE]; // not circular, latest discovered nodes are not kept
@@ -320,7 +464,7 @@ class HomeScreen : public UIScreen {
   int _sensors_visible_rows = UI_RECENT_LIST_SIZE;  // updated each render()
   int next_sensors_refresh = 0;
 
-  void refresh_sensors() {
+  void refresh_sensors(uint32_t interval_ms = 0) {
     if (millis() > next_sensors_refresh) {
       sensors_lpp.reset();
       sensors_nb = 0;
@@ -333,11 +477,17 @@ class HomeScreen : public UIScreen {
         reader.skipData(type);
         sensors_nb ++;
       }
+      if (interval_ms != 0) {
+        // INA-экрану нужен живой замер: ток батареи и зарядника меняется
+        // в пределах секунды.
+        next_sensors_refresh = millis() + interval_ms;
+      } else {
 #if AUTO_OFF_MILLIS > 0
-      next_sensors_refresh = millis() + 5000; // refresh sensor values every 5 sec
+        next_sensors_refresh = millis() + 5000; // refresh sensor values every 5 sec
 #else
-      next_sensors_refresh = millis() + 60000; // refresh sensor values every 1 min
+        next_sensors_refresh = millis() + 60000; // refresh sensor values every 1 min
 #endif
+      }
     }
   }
 
@@ -431,7 +581,7 @@ public:
     switch (page) {
 #ifdef UI_DARKTEC_SETTINGS
       case SettingsPage::ROOT:    return 6;   // + [ Darktec ]
-      case SettingsPage::DARKTEC_PAGE: return 6;   // Назад + 5 параметров
+      case SettingsPage::DARKTEC_PAGE: return 5;   // 4 параметра + "Back" внизу
 #else
       case SettingsPage::ROOT:    return 5;
 #endif
@@ -503,17 +653,16 @@ public:
     }
 #ifdef UI_DARKTEC_SETTINGS
     else if (page == SettingsPage::DARKTEC_PAGE) {
-      // Своя строка выхода внизу списка (как в официалке): i==5 — "Back",
-      // пункты — i==0..4. Без стрелки: курсор ">" рядом с "<" сливается.
-      if (i == 5) return "Back";
+      // Своя строка выхода внизу списка (как в официалке): i==4 — "Back",
+      // пункты — i==0..3. Без стрелки: курсор ">" рядом с "<" сливается.
+      if (i == 4) return "Back";
       if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
         return _darktec_note;
       }
-      if (i == 0) return "Capacity, mAh";
-      if (i == 1) return "Batt type";
-      if (i == 2) return "Cells";
+      if (i == 0) return "Capacity";
+      if (i == 1) return "Screen on";
+      if (i == 2) return "NF Speed";
       if (i == 3) return "Radio mod";
-      if (i == 4) return "Charge, mA";
     }
 #endif
     else if (i == 0) {
@@ -553,21 +702,6 @@ public:
       if (i == 3) return "AEIC";
       if (i == 4) return "MCOimg";
     }
-#ifdef UI_DARKTEC_SETTINGS
-    if (page == SettingsPage::DARKTEC_PAGE) {
-      // Свежая заметка заменяет подпись строки (FR-9..11, D-8: "after
-      // reboot"; FR-10: предупреждение про 2S). Текст — английский, как
-      // весь остальной UI прошивки.
-      if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
-        return _darktec_note;
-      }
-      if (i == 1) return "Capacity, mAh";
-      if (i == 2) return "Batt type";
-      if (i == 3) return "Cells";
-      if (i == 4) return "Radio mod";
-      if (i == 5) return "Charge, mA";
-    }
-#endif
     return "";
   }
 
@@ -697,17 +831,18 @@ public:
       const DarktecPrefs::Settings& s = DarktecPrefs::get();
       char raw[12] = "";
       if (i == 0) {
-        snprintf(raw, sizeof(raw), "%u", (unsigned)s.capacity_mah);
+        // Два номинала пакета — 3000 и 4000 мАч, клик переключает.
+        snprintf(raw, sizeof(raw), "%u mAh", (unsigned)s.capacity_mah);
       } else if (i == 1) {
-        static const char* chem_names[3] = { "Li-ion", "LiFePO4", "LTO" };
-        snprintf(raw, sizeof(raw), "%s", chem_names[s.chem < 3 ? s.chem : 0]);
+        static const char* on_names[DarktecPrefsFormat::kAutoOffCount] = { "15s", "30s", "1m", "5m", "1h" };
+        snprintf(raw, sizeof(raw), "%s", on_names[s.auto_off_idx < DarktecPrefsFormat::kAutoOffCount ? s.auto_off_idx : 0]);
       } else if (i == 2) {
-        snprintf(raw, sizeof(raw), "%uS", (unsigned)s.cells);
+        static const char* nf_names[DarktecPrefsFormat::kNoiseCount] = { "100ms", "250ms", "500ms", "1000ms" };
+        snprintf(raw, sizeof(raw), "%s", nf_names[s.noise_idx < DarktecPrefsFormat::kNoiseCount ? s.noise_idx : 2]);
       } else if (i == 3) {
-        static const char* mod_names[4] = { "HT-RA62", "E22-30S", "E22P-868", "E22-33S" };
-        snprintf(raw, sizeof(raw), "%s", mod_names[s.module < 4 ? s.module : 1]);
-      } else if (i == 4) {
-        snprintf(raw, sizeof(raw), "%u", (unsigned)s.charge_ma);
+        // Порядок обязан совпадать с DarktecPrefsFormat::ModuleCode.
+        static const char* mod_names[4] = { "E22-33S", "E22-30S", "RA62", "E22P" };
+        snprintf(raw, sizeof(raw), "%s", mod_names[s.module < 4 ? s.module : 0]);
       }
       if (raw[0]) {
         if (_darktec_editing && _settings_sel == i) {
@@ -751,7 +886,7 @@ public:
 
 #ifdef UI_DARKTEC_SETTINGS
     if (i == 0 && page != SettingsPage::DARKTEC_PAGE) {
-      // У Darktec-страницы своя "Back" внизу (i==5), пункты — с i==0.
+      // У Darktec-страницы своя "Back" внизу (i==4), пункты — с i==0.
 #else
     if (i == 0) {
 #endif
@@ -883,45 +1018,29 @@ public:
     }
 
 #ifdef UI_DARKTEC_SETTINGS
-    // Darktec (spec 0001, FR-8..11): правка /darktec.prefs, шаг ±100,
-    // на краях диапазона — переход на противоположный край. Химия/ячейки/
-    // модуль применяются после перезагрузки (D-8) — заметка на строке.
-    // "Back" — последняя строка (i==5), возврат в корень настроек.
+    // Darktec: правка /darktec.prefs. Пункты — Capacity, Screen on, NF Speed,
+    // Radio mod; "Back" — последняя строка (i==4), возврат в корень настроек.
+    // Ёмкость и радиомодуль применяются сразу, без перезагрузки; индекс
+    // времени горения экрана читает UITask (таймер auto-off), здесь только
+    // запись поля.
     if (page == SettingsPage::DARKTEC_PAGE) {
       DarktecPrefs::Settings s = DarktecPrefs::get();
       if (i == 0) {
-        int cap = (int)s.capacity_mah + (fwd ? 100 : -100);
-        if (cap > (int)DarktecPrefsFormat::kCapacityMax) cap = (int)DarktecPrefsFormat::kCapacityMin;
-        if (cap < (int)DarktecPrefsFormat::kCapacityMin) cap = (int)DarktecPrefsFormat::kCapacityMax;
-        s.capacity_mah = (uint16_t)cap;
+        // Два номинала пакета: клик переключает 3000 ⇄ 4000 мАч.
+        s.capacity_mah = (s.capacity_mah == 4000) ? 3000 : 4000;
+        board.setBatteryCapacityMah((float)s.capacity_mah);   // модель питания — сразу
       } else if (i == 1) {
-        s.chem = (s.chem + (fwd ? 1 : 2)) % 3;
-        if (s.chem != DarktecPrefsFormat::CHEM_LTO && s.cells > 1) {
-          s.cells = 1;   // 2S доступна только для LTO — сброс с предупреждением (FR-10)
-          darktecNote(2, "cells: 1 (2S=LTO)");
-        } else {
-          darktecNote(1, "after reboot");
-        }
+        const uint8_t n = DarktecPrefsFormat::kAutoOffCount;
+        s.auto_off_idx = fwd ? (s.auto_off_idx + 1) % n
+                             : (s.auto_off_idx + n - 1) % n;
       } else if (i == 2) {
-        if (s.cells == 2) {
-          s.cells = 1;
-          darktecNote(2, "after reboot");
-        } else if (s.chem == DarktecPrefsFormat::CHEM_LTO) {
-          s.cells = 2;
-          darktecNote(2, "after reboot");
-        } else {
-          darktecNote(2, "2S: LTO only");
-          return;
-        }
+        const uint8_t n = DarktecPrefsFormat::kNoiseCount;
+        s.noise_idx = fwd ? (s.noise_idx + 1) % n
+                          : (s.noise_idx + n - 1) % n;
       } else if (i == 3) {
-        s.module = (s.module + (fwd ? 1 : 3)) % 4;
-        darktecNote(3, "after reboot");
+        s.module = fwd ? (s.module + 1) % 4 : (s.module + 3) % 4;
+        board.setRadioModule(s.module);   // RF-тракт и ETA — сразу
       } else if (i == 4) {
-        int ma = (int)s.charge_ma + (fwd ? 100 : -100);
-        if (ma > (int)DarktecPrefsFormat::kChargeMax) ma = (int)DarktecPrefsFormat::kChargeMin;
-        if (ma < (int)DarktecPrefsFormat::kChargeMin) ma = (int)DarktecPrefsFormat::kChargeMax;
-        s.charge_ma = (uint16_t)ma;
-      } else if (i == 5) {
         // Back — возврат в корень настроек (тот же переход, что у общей
         // строки i==0 на других подстраницах).
         _settings_page = SettingsPage::ROOT;
@@ -1050,10 +1169,16 @@ public:
     // battery voltage
     renderBatteryIndicator(display, _task->getBattMilliVolts());
 
-    // curr page indicator
-    int visible_count = HomePage::Count;
+    // curr page indicator: считаем только видимые страницы, чтобы точки
+    // соответствовали тому, что реально листается.
+    int visible_count = 0;
+    for (uint8_t i = 0; i < HomePage::Count; i++) {
+      if (!pageHidden(i)) visible_count++;
+    }
+    if (visible_count < 1) visible_count = 1;
     int x = display.width() / 2 - 5 * (visible_count - 1);
     for (uint8_t i = 0; i < HomePage::Count; i++) {
+      if (pageHidden(i)) continue;
       if (i == _page) {
         display.fillRect(x-1, dot_y-1, 3, 3);
       } else {
@@ -1252,6 +1377,214 @@ public:
         display.setCursor(0, y); display.print(tmp);
       }
 #ifndef WITH_WIFI_SWITCHING
+#if UI_INA_PAGE == 1
+    } else if (_page == HomePage::INA) {
+      display.setTextSize(1);
+      refresh_sensors(UI_INA_REFRESH_MS);
+
+      // Two of the three INA3221 rails are shown: the battery the node runs
+      // from (BATT) and the charger feeding it (CHRG). The third is ignored.
+      float v_batt = 0, a_batt = 0;
+      float v_chrg = 0, a_chrg = 0;
+      bool has_batt = false, has_chrg = false;
+
+      LPPReader r(sensors_lpp.getBuffer(), sensors_lpp.getSize());
+      uint8_t channel, type;
+      while (r.readHeader(channel, type)) {
+        if (channel != INA_CHANNEL_BATT && channel != INA_CHANNEL_CHRG) {
+          r.skipData(type);
+          continue;
+        }
+        const bool is_batt = (channel == INA_CHANNEL_BATT);
+        float v;
+        switch (type) {
+          case LPP_VOLTAGE:
+            r.readVoltage(v);
+            if (is_batt) { v_batt = v; has_batt = true; } else { v_chrg = v; has_chrg = true; }
+            break;
+          case LPP_CURRENT:
+            r.readCurrent(v);
+            // Magnitude only: a discharging rail reads negative through the
+            // shunt, and a minus sign appearing and vanishing would jog columns.
+            v = fabsf(v);
+            if (is_batt) a_batt = v; else a_chrg = v;
+            break;
+          default:
+            // LPP_POWER lands here and is deliberately dropped: CayenneLPP
+            // carries power as whole watts, so the fraction would be lost.
+            // Power is recomputed as V * A below instead.
+            r.skipData(type);
+        }
+      }
+
+      struct InaRow { const char* label; float v, a; bool found; };
+      const InaRow rows[2] = {
+        { "BATT", v_batt, a_batt, has_batt },
+        { "CHRG", v_chrg, a_chrg, has_chrg },
+      };
+
+      char buf[26];
+      int y = content_y;
+
+      snprintf(buf, sizeof(buf), "%-4s %5s%5s%5s", "", "V", "A", "W");
+      display.setCursor(0, y);
+      display.print(buf);
+      y += line_h;
+
+      for (int i = 0; i < 2; i++) {
+        if (rows[i].found) {
+          float w = rows[i].v * rows[i].a;
+          if (w > 9.99f)
+            snprintf(buf, sizeof(buf), "%-4s %5.2f%5.2f%5.1f",
+                     rows[i].label, rows[i].v, rows[i].a, w);
+          else
+            snprintf(buf, sizeof(buf), "%-4s %5.2f%5.2f%5.2f",
+                     rows[i].label, rows[i].v, rows[i].a, w);
+        } else {
+          snprintf(buf, sizeof(buf), "%-4s %5s%5s%5s", rows[i].label, "--", "--", "--");
+        }
+        display.setCursor(0, y);
+        display.print(buf);
+        y += line_h;
+      }
+
+#if defined(DARKTEC)
+      // Залито в пакет за текущую сессию заряда (счётчик в DarktecBoard).
+      snprintf(buf, sizeof(buf), "BATT CHRG: %lu mAh",
+               (unsigned long)board.getChargeMah());
+      display.setCursor(0, y);
+      display.print(buf);
+#endif
+
+      // Redraw at the same cadence the values are re-read at.
+      return UI_INA_REFRESH_MS;
+#endif
+#if UI_NOISE_PAGE == 1
+    } else if (_page == HomePage::NOISE) {
+      display.setTextSize(1);
+
+      // The core recomputes the floor every NOISE_FLOOR_CALIB_INTERVAL and keeps
+      // it cached, so reading it never touches the radio. The trace step comes
+      // from Settings (NF Speed): the window covers ~6 s at 100 ms and ~64 s at
+      // 1000 ms.
+      const int sample_ms = NOISE_SPEED_MS[constrain((int)DarktecPrefs::get().noise_idx, 0, 3)];
+      if ((long)(millis() - next_noise_sample) >= 0) {
+        noise_hist[noise_head] = (int16_t)radio_driver.getNoiseFloor();
+        noise_head = (uint8_t)((noise_head + 1) % NOISE_SAMPLES);
+        if (noise_count < NOISE_SAMPLES) noise_count++;
+        next_noise_sample = millis() + sample_ms;
+      }
+
+      // Auto-scale to the smoothed series, not the raw one: a three-point
+      // average never reaches the raw extremes, so scaling to those would
+      // reserve a band that no amount of signal could fill.
+      int lo = 0, hi = 0;
+      for (int i = 0; i < noise_count; i++) {
+        int v = noiseSmoothedAt(i);
+        if (i == 0)      { lo = v; hi = v; }
+        else if (v < lo) { lo = v; }
+        else if (v > hi) { hi = v; }
+      }
+      // A floor on the span keeps a dead-flat trace from being stretched into
+      // fake detail.
+      if (hi - lo < 8) {
+        int mid = (lo + hi) / 2;
+        lo = mid - 4;
+        hi = mid + 4;
+      }
+
+      const int plot_y = hdr_line_h + 9;
+      const int foot_y = display.height() - 9;
+      const int plot_h = foot_y - 2 - plot_y;
+      int bar_w = display.width() / NOISE_SAMPLES;
+      if (bar_w < 1) bar_w = 1;
+
+      char nbuf[24];
+      display.setColor(UIColor::secondary_txt);
+      display.fillRect(0, plot_y + plot_h - 1, display.width(), 1);
+
+      // A trace, not filled bars: filled bars of a steady floor merge into one
+      // slab and hide the very variation they exist to show.
+      const int y_top = plot_y;
+      const int y_bot = plot_y + plot_h - 2;
+      display.setColor(UIColor::primary_txt);
+      int prev_y = -1;
+      for (int i = 0; i < noise_count; i++) {
+        int v = noiseSmoothedAt(i);
+        int y = y_bot - (v - lo) * (y_bot - y_top) / (hi - lo);
+        if (y < y_top) y = y_top;
+        if (y > y_bot) y = y_bot;
+
+        if (prev_y < 0) {
+          display.fillRect(i * bar_w, y, bar_w, 2);
+        } else {
+          int top = (y < prev_y) ? y : prev_y;
+          int bot = (y < prev_y) ? prev_y : y;
+          display.fillRect(i * bar_w, top, bar_w, bot - top + 2);
+        }
+        prev_y = y;
+      }
+
+      // Footer: window floor left, live value centred, window ceiling right.
+      snprintf(nbuf, sizeof(nbuf), "%d", lo);
+      display.setCursor(0, foot_y);
+      display.print(nbuf);
+
+      snprintf(nbuf, sizeof(nbuf), "NF: %d", radio_driver.getNoiseFloor());
+      display.drawTextCentered(display.width() / 2, foot_y, nbuf);
+
+      snprintf(nbuf, sizeof(nbuf), "%d", hi);
+      display.setCursor(display.width() - display.getTextWidth(nbuf) - 1, foot_y);
+      display.print(nbuf);
+
+      return sample_ms;
+#endif
+#if UI_PAGE_BATT
+    } else if (_page == HomePage::BATT) {
+      display.setTextSize(1);
+      refresh_sensors(UI_INA_REFRESH_MS);
+
+      // Pack voltage straight off the INA rail the node runs from.
+      float pack_v = 0.0f;
+      bool have_v = false;
+      LPPReader r(sensors_lpp.getBuffer(), sensors_lpp.getSize());
+      uint8_t channel, type;
+      while (r.readHeader(channel, type)) {
+        if (type == LPP_VOLTAGE && channel == INA_CHANNEL_BATT) {
+          r.readVoltage(pack_v);
+          have_v = true;
+        } else {
+          r.skipData(type);
+        }
+      }
+
+      char bbuf[26];
+      int by = content_y;
+      uint32_t remain = board.getRemainMah();
+      uint32_t capacity = board.getCapacityMah();
+
+      if (have_v) snprintf(bbuf, sizeof(bbuf), "VOLT   %.2fV", pack_v);
+      else        snprintf(bbuf, sizeof(bbuf), "VOLT   --");
+      display.setCursor(0, by); display.print(bbuf); by += line_h;
+
+      snprintf(bbuf, sizeof(bbuf), "REMAIN %lumAh %u%%",
+               (unsigned long)remain,
+               capacity ? (unsigned)(remain * 100u / capacity) : 0u);
+      display.setCursor(0, by); display.print(bbuf); by += line_h;
+
+      uint32_t eta_min = board.getEtaMinutes();
+      snprintf(bbuf, sizeof(bbuf), "ETA    %luh %lum",
+               (unsigned long)(eta_min / 60), (unsigned long)(eta_min % 60));
+      display.setCursor(0, by); display.print(bbuf); by += line_h;
+
+      // Iavg намеренно не выводим: на полной банке он почти не меняется и
+      // выглядит застывшим. Показываем ток текущего состояния.
+      snprintf(bbuf, sizeof(bbuf), "Inow   %umA",
+               (unsigned)(board.getStateLoadMa() + 0.5f));
+      display.setCursor(0, by); display.print(bbuf);
+
+      return UI_INA_REFRESH_MS;
+#endif
     } else if (_page == HomePage::BLUETOOTH) {
       display.setColor(UIColor::primary_txt);
       display.drawXbm((display.width() - 32) / 2, content_y,
@@ -1768,7 +2101,7 @@ public:
           if (_settings_sel < _settings_scroll) _settings_scroll = _settings_sel;
           return true;
         }
-        // KEY_NEXT (вниз) и KEY_ENTER на "Back" (i==5) проваливаются в generic
+        // KEY_NEXT (вниз) и KEY_ENTER на "Back" (i==4) проваливаются в generic
       }
 #endif
 
@@ -1839,14 +2172,16 @@ public:
     }
 #endif
     if (c == KEY_LEFT || c == KEY_PREV || c == KEY_UP) {
-      _page = (_page + HomePage::Count - 1) % HomePage::Count;
+      do { _page = (_page + HomePage::Count - 1) % HomePage::Count; }
+      while (pageHidden(_page));
 #if UI_SENSORS_PAGE == 1
       if (_page == HomePage::SENSORS) sensors_scroll_offset = 0;
 #endif
       return true;
     }
     if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_DOWN) {
-      _page = (_page + 1) % HomePage::Count;
+      do { _page = (_page + 1) % HomePage::Count; }
+      while (pageHidden(_page));
 #if UI_SENSORS_PAGE == 1
       if (_page == HomePage::SENSORS) sensors_scroll_offset = 0;
 #endif
@@ -1963,6 +2298,11 @@ public:
   int _max_unread = 32;  // runtime cap, changed via setMaxSizes()
   int _max_log    = 32;
 
+  // Когда экран входящего закрывается сам. 0 = не закрывать: в режиме истории
+  // пользователь листает архив и выйдет сам.
+  unsigned long _dismiss_at = 0;
+  bool _on_screen = false;   // экран сейчас на виду (см. onShown/onHidden)
+
   void setMaxSizes(int max_unread, int max_log) {
     _max_unread = constrain(max_unread, 1, MAX_UNREAD_MSGS);
     _max_log    = constrain(max_log,    1, MAX_LOG_MSGS);
@@ -1986,6 +2326,23 @@ private:
   }
 
 public:
+  // Взвести автоскрытие: экран закроется сам через ms миллисекунд.
+  void armAutoDismiss(uint32_t ms) { _dismiss_at = millis() + ms; }
+
+  bool isInHistory() const { return _in_history; }
+
+  void onShown() { _on_screen = true; }
+  void onHidden() { _on_screen = false; _dismiss_at = 0; }
+  bool isOnScreenNow() const { return _on_screen; }
+
+  // Закрываемся по таймеру. В истории и после ухода с экрана — не трогаем.
+  void poll() override {
+    if (_dismiss_at == 0 || _in_history || !_on_screen) return;
+    if ((long)(millis() - _dismiss_at) < 0) return;
+    _dismiss_at = 0;
+    _task->gotoHomeScreen();
+  }
+
   void addPreview(uint8_t path_len, const char* from_name, const char* msg, bool is_pm) {
     MsgEntry entry = {};
     auto p = &entry;
@@ -2231,7 +2588,7 @@ public:
 void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs) {
   _display = display;
   _sensors = sensors;
-  _auto_off = millis() + AUTO_OFF_MILLIS;
+  _auto_off = millis() + autoOffMillis();
 
 #ifdef DISPLAY_TZ
   setenv("TZ", DISPLAY_TZ, 1);
@@ -2267,6 +2624,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
     }
     uiBegin(*_display, _node_prefs);
     _display->turnOn();
+    board.setDisplayOn(true);
 
     _display->startFrame();
     _display->clear();
@@ -2420,10 +2778,19 @@ void UITask::onShowMessage(uint8_t path_len, const char* from_name, const char* 
   _preview_close_at = 0;
 
   bool on_clock = (curr == home) && ((HomeScreen*)home)->isOnClockPage();
+  // «Первая страница» — главный экран, но не страница часов: там своя логика
+  // (инлайн-показ PM по настройке PM CLOCK).
+  bool on_first = (curr == home) && !on_clock;
 
   ((MsgPreviewScreen*)msg_preview)->addPreview(path_len, from_name, text, is_pm);
 
-  if (on_clock) {
+  // Показываем входящее только с ПЕРВОЙ страницы и ровно на
+  // MESSAGE_PREVIEW_MILLIS. С других страниц сообщение просто копится в
+  // непрочитанных: раньше оно мелькало на долю секунды при листании настроек.
+  if (on_first) {
+    setCurrScreen(msg_preview);
+    ((MsgPreviewScreen*)msg_preview)->armAutoDismiss(MESSAGE_PREVIEW_MILLIS);
+  } else if (on_clock) {
     int pm_mode = ((HomeScreen*)home)->getPmClockMode();
     if (pm_mode == 1 && is_pm) {
       // PM inline: stay on clock page, show PM overlay
@@ -2432,18 +2799,18 @@ void UITask::onShowMessage(uint8_t path_len, const char* from_name, const char* 
     } else if (pm_mode == 0) {
       // All messages switch to msg_preview
       setCurrScreen(msg_preview);
+      ((MsgPreviewScreen*)msg_preview)->armAutoDismiss(MESSAGE_PREVIEW_MILLIS);
     }
     // pm_mode==1 && !is_pm: silently queued, no screen switch
-  } else {
-    setCurrScreen(msg_preview);
   }
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection()) {
       _display->turnOn();
+    board.setDisplayOn(true);
     }
     if (_display->isOn()) {
-      _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
+      _auto_off = millis() + autoOffMillis();  // extend the auto-off timer
       _next_refresh = 100;  // trigger refresh
     }
   }
@@ -2505,6 +2872,12 @@ void UITask::userLedHandler() {
 
 void UITask::setCurrScreen(UIScreen* c) {
   if (c != msg_preview) _preview_close_at = 0;   // left the preview: nothing to close later
+  // Сообщаем экрану входящего, что его показали или что с него ушли:
+  // на этом держится автоскрытие через MESSAGE_PREVIEW_MILLIS.
+  if (msg_preview != NULL) {
+    if (c == msg_preview) ((MsgPreviewScreen*)msg_preview)->onShown();
+    else                  ((MsgPreviewScreen*)msg_preview)->onHidden();
+  }
   curr = c;
   _next_refresh = 100;
 }
@@ -2535,7 +2908,8 @@ void UITask::shutdown(bool restart){
     // stays on the panel.
     if (_display != NULL) {
       power_screens::drawPowerOff(_display, _low_battery_off);
-      _display->turnOff();   // after the last e-ink frame this keeps the image
+      _display->turnOff();
+    board.setDisplayOn(false);   // after the last e-ink frame this keeps the image
     }
 #if defined(NRF52_POWER_MANAGEMENT)
     // Arms the wake on USB power / a recovered battery (configureVoltageWake).
@@ -2602,6 +2976,7 @@ void UITask::loop() {
     c = checkDisplayOn(KEY_ENTER);
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {
     if (_display) _display->turnOff();
+    board.setDisplayOn(false);
   } else if (ev == BUTTON_EVENT_DOUBLE_CLICK) {
     c = handleDoubleClick(KEY_SELECT);
   } else if (ev == BUTTON_EVENT_TRIPLE_CLICK) {
@@ -2658,7 +3033,7 @@ void UITask::loop() {
 
   if (c != 0 && curr) {
     curr->handleInput(c);
-    _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
+    _auto_off = millis() + autoOffMillis();   // extend auto-off timer
     _next_refresh = 100;  // trigger refresh
   }
 
@@ -2703,17 +3078,19 @@ void UITask::loop() {
     // because OLED panels burn in quickly; only enable for LCD targets or
     // where the display is replaceable.
     if (board.isExternalPowered()) {
-      _auto_off = millis() + AUTO_OFF_MILLIS;
+      _auto_off = millis() + autoOffMillis();
     }
 #endif
     if (_clock_dim_mode == 1) {
       // OFF: no dim while on CLOCK page
       if (home && ((HomeScreen*)home)->isOnClockPage())
-        _auto_off = millis() + AUTO_OFF_MILLIS;
-      if (millis() > _auto_off) { _saveElapsedToPrefs(); _display->turnOff(); }
+        _auto_off = millis() + autoOffMillis();
+      if (millis() > _auto_off) { _saveElapsedToPrefs(); _display->turnOff();
+    board.setDisplayOn(false); }
     } else {
       // ON: normal auto-off
-      if (millis() > _auto_off) { _saveElapsedToPrefs(); _display->turnOff(); }
+      if (millis() > _auto_off) { _saveElapsedToPrefs(); _display->turnOff();
+    board.setDisplayOn(false); }
     }
 #endif
   }
@@ -2736,10 +3113,11 @@ void UITask::loop() {
 char UITask::checkDisplayOn(char c) {
   if (_display != NULL) {
     if (!_display->isOn()) {
-      _display->turnOn();   // turn display on and consume event
+      _display->turnOn();
+    board.setDisplayOn(true);   // turn display on and consume event
       c = 0;
     }
-    _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
+    _auto_off = millis() + autoOffMillis();   // extend auto-off timer
     _next_refresh = 0;  // trigger refresh
   }
   return c;

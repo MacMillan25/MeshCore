@@ -24,11 +24,14 @@
 #endif
 
 #include <helpers/sensors/EnvironmentSensorManager.h>
+#include <DarktecSensorManager.h>
 
 extern DarktecBoard board;
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
-extern EnvironmentSensorManager sensors;
+// Обёртка над EnvironmentSensorManager: добавляет удалённо управляемые выходы
+// (RELAY = T2). Общий код для всех ролей — см. DarktecSensorManager.h.
+extern DarktecSensorManager sensors;
 
 #ifdef DISPLAY_CLASS
   extern DISPLAY_CLASS display;
@@ -37,3 +40,12 @@ extern EnvironmentSensorManager sensors;
 
 bool radio_init();
 mesh::LocalIdentity radio_new_identity();
+
+// Применение модуля к RF-тракту: 0=33S, 1=30S, 2=RA62 (pin 6 = RXEN, ведёт
+// RadioLib), 3=E22P (pin 6 = EN, держится высоким вручную). Определена в
+// target.cpp, где живёт объект радио; board зовёт её из setRadioModule().
+void darktec_radio_set_rf(uint8_t module_idx);
+
+// Вызывается после загрузки prefs: ставит модуль, выбранный в настройках.
+// До этого работает DARKTEC_RADIO_DEFAULT_MODULE.
+void darktec_apply_saved_radio_module(uint8_t module_idx);

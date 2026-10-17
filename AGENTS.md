@@ -1,26 +1,307 @@
 # AGENTS.md
 
-## Communication preferences
+Правила и карта проекта MeshCore / DarkTec. Читать первым делом перед любой работой в репозитории.
 
-- Always communicate with the repository owner in **Russian**, even when they write in English. Do not switch to another language unless they explicitly ask for it in a given request.
+## Язык и стиль
 
-## Cursor Cloud specific instructions
+- Общение и коммиты — **на русском**. Технические термины можно оставлять английскими.
+- Отвечать кратко: сначала что сделано или что делать, по шагам. Архитектуру и внутренности кода не пересказывать, если об этом не просят.
+- Git и VS Code могут быть не освоены — объяснять по шагам или делать самому.
+- Ничего не удалять и не переписывать без явного согласия. Чужую работу не терять никогда.
 
-This repo is the **MeshCore `south_edition` firmware** — embedded C++ built with **PlatformIO** (Arduino framework). There are **no servers, databases, or long-running services**; the product is firmware binaries flashed onto LoRa radio boards. "Running the app" without physical hardware means (a) running the native host unit tests and (b) compiling a firmware target into a `.bin`/`.uf2`.
+## Git: правила работы
 
-### Toolchain / how it runs
-- The build engine is the PlatformIO CLI (`pio`), installed via `pip install --upgrade platformio` (see the update script). It lands in `~/.local/bin`, which has been added to `PATH` in `~/.bashrc`. If `pio` is not found in a fresh shell, run `export PATH="$HOME/.local/bin:$PATH"`.
-- First `pio test`/`pio run` for a given platform downloads large toolchains/libraries (espressif32, nordicnrf52, etc.) into `~/.platformio` and needs network access. Subsequent builds use that cache. An ESP32-S3 first build takes ~2 min; incremental builds are seconds.
+- Рабочая ветка — **`feat/darktec-e22p`**. `main` — релизная ветка форка, туда не пушить.
+- `origin` = <https://github.com/MacMillan25/MeshCore.git> — сюда идёт вся работа.
+  `upstream` (`beeline09/MeshCore`) и `mc` (`meshcore-dev/MeshCore`) — только для чтения, не пушить.
+- **В начале каждой сессии:** `git fetch --all --prune` и подтянуть актуальное, прежде чем что-то править.
+- **Закончил задачу — сам закоммить и сам запушь** в `origin`, не дожидаясь просьбы. «Сохрани» / «залей» / «закинь на гит» — это коммит плюс push.
+- Перед переключением ветки или перезаписью файлов проверить, нет ли незакоммиченных правок.
+- Никогда не делать `git clean -fdx` и подобную массовую зачистку, не убедившись, что там нет чужой работы.
+- Заканчивать сессию чистой рабочей папкой (`git status`), чтобы следующая машина не спотыкалась.
+- Коммиты — в стиле истории: `fix(darktec): …`, `feat(darktec): …`, `docs: …`, `chore: …`.
 
-### Test / build / run (no hardware needed)
-- Unit tests (host/native, GoogleTest): `pio test -e native -vv`. Only `src/Utils.cpp` is covered today (5 tests in `test/test_utils/`). Note the trailing PlatformIO summary prints `0 test cases: 0 succeeded` — that is a known cosmetic quirk; trust the `native:test_utils [PASSED]` line instead.
-- List all build targets (environments): `sh build.sh list` or `pio project config`. There are 800+ `<board>_<app>` env combinations from `variants/` × `examples/`.
-- Build one firmware target: `pio run -e <env>` (e.g. `pio run -e Heltec_v3_companion_radio_ble`). Output binary lands in `.pio/build/<env>/firmware.bin` (ESP32) or `firmware.uf2` (nRF52/RP2040). The `.github/workflows/pr-build-check.yml` matrix lists representative envs across each platform.
-- Release-style build with versioning/packaging into `out/`: `FIRMWARE_VERSION=v0.0.0 sh build.sh build-firmware <env>`.
-- Flashing (`pio run -e <env> -t upload`) and `pio device monitor` require physical hardware/USB and cannot run in this VM.
+### Транспорт к GitHub
 
-### Lint / formatting
-- No CI lint job. A `.clang-format` exists but is **not** enforced; per README/CONTRIBUTING, do **not** retroactively reformat existing code (it creates noisy diffs).
+Способы проверять, а не предполагать — они различаются по машинам и окружениям.
 
-### PR conventions
-- Per README, the intended base branch for contributions is `dev`. Automated-agent PRs may append `🤖🤖` to the PR title to opt into fast-track merging (see `CONTRIBUTING.md`).
+- **Если TLS падает** с `schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS` — переключить бэкенд:
+  `git config http.sslBackend openssl` (локально в репозитории, не `--global`).
+- **Если `git push` падает** с `could not read Username for 'https://github.com'` или зависает — пушить скриптом:
+  ```
+  python tools/git_push.py                 # текущая ветка
+  python tools/git_push.py <ветка>         # указанная ветка
+  ```
+  Скрипт берёт токен у `gh`, а если `gh` нет — у Git Credential Manager, и подставляет его в URL ровно на один `git push`. Токен не сохраняется и вычищается из вывода.
+- **Подпись коммитов** проверять в первую очередь. Если `git commit` падает с «Author identity unknown» — задать `user.name` / `user.email` локально (`git config`, без `--global`). Эти значения в файл не вписывать.
+- **После push проверить, что дошло:** `git rev-parse HEAD` против `git rev-parse origin/feat/darktec-e22p`. Зависший push не отправляет ничего, хотя выглядит как «команда думает».
+- **Никогда не оставлять токен в `.git/config`.** Если без токена в адресе никак — только на одну команду, потом сразу проверить конфиг.
+
+### Если `git status` показывает сотни изменённых файлов
+
+Сначала проверить, а не коммитить. Обычно это переписанные переводы строк.
+
+- Сравнить хеши без фильтров: `git hash-object --no-filters -- <файл>` против `git rev-parse HEAD:<файл>`. Совпали — правок нет.
+- Если различаются только переводы строк — `git add --renormalize -- <файлы>`, а не перезапись файлов.
+- Держать `core.autocrlf=false` в этом репозитории: с `true` рабочее дерево вечно выглядит грязным.
+
+## Не держать проект в облаке и не копировать папку
+
+Транспорт между компьютерами — **только Git**: не Яндекс.Диск, не OneDrive, не Dropbox, не флешка, не копирование через проводник.
+
+Облачный клиент уже терял `.git` и файлы, а копирование папки поверх самой себя заносит в `.git` мусорные `index (2)`, `config (2)` и ломает репозиторий. Он же переписывает переводы строк и обрывает запись на середине. Если проект оказался внутри синхронизируемой папки — сказать об этом и предложить вынести.
+
+## Проект DarkTec
+
+Железо: **nRF52840 + SX1262**, модули E22 / E22P, дисплей SSD1306 128×64 (I2C), INA3221, GPS, буззер. Прошивка на C++ под Arduino framework, сборка PlatformIO. Версия — **1.18.0**, база — beeline09 `south_edition` (коммит `83f2b0b4`).
+
+**Главное правило: любая правка, касающаяся модуля или железа, делается ОДИНАКОВО для всех ролей и всех модулей.**
+
+- **8 ролей = 8 env.** Радиомодуль больше не выбирается сборкой: E22-900M33S, E22-900M30S, HT-RA62 и E22P-868M30S работают из одной прошивки.
+- Модуль выбирается в подменю `[ Darktec ]` компаньона или командой CLI `set radio.module 0-3` и применяется на лету:
+  - `0` = E22-900M33S, `1` = E22-900M30S, `2` = HT-RA62 — пин 6 модуля это `RXEN`, им управляет RadioLib;
+  - `3` = E22P-868M30S — пин 6 это `EN`, общий включатель тракта. RadioLib пины RF-ключа не получает (`setRfSwitchPins(NC, NC)`), нога держится высоким вручную.
+- Выбор влияет и на ETA (модель питания берёт токи модуля), и на RF-тракт.
+- Правка, касающаяся железа, всё равно делается **одинаково для всех ролей**: нельзя поправить только BLE-компаньон и забыть репитер.
+
+### 8 env: роли
+
+| Роль | env |
+|---|---|
+| репитер | `Darktec_repeater` |
+| репитер + мост RS232 | `Darktec_repeater_bridge_rs232_serial1` |
+| комнатный сервер (общий чат) | `Darktec_room_server` |
+| простой чат с терминала | `Darktec_terminal_chat` |
+| компаньон по USB | `Darktec_companion_radio_usb` |
+| компаньон по BLE | `Darktec_companion_radio_ble` |
+| сенсор + GPS | `Darktec_sensor` |
+| KISS-модем (APRS и др. софт) | `Darktec_kiss_modem` |
+
+### Как переключить модуль
+
+- **Компаньон:** настройки → `[ Darktec ]` → `Radio mod`, значения `E22-33S` / `E22-30S` / `RA62` / `E22P`. Применяется сразу: меняются и RF-тракт, и модель питания.
+- **Любая роль с CLI** (репитер, комната, сенсор, компаньон — в том числе через Remote CLI):
+  ```
+  set radio.module 0     # 0=E22-33S, 1=E22-30S, 2=RA62, 3=E22P
+  get radio.module       # проверить, что встало
+  ```
+  Выбор сохраняется в `/darktec.prefs` и переживает перезагрузку.
+- **KISS-модем и terminal_chat** своего CLI/меню не имеют: они читают `/darktec.prefs` при старте, но поменять модуль из ноды нечем.
+- Что происходит на уровне железа: для `0..2` вызывается `setRfSwitchPins(2, NC)` — пин 6 снова `RXEN` под RadioLib; для `3` вызывается `setRfSwitchPins(NC, NC)` и пин 6 держится высоким вручную (`EN`). Модель питания (ETA) получает тот же индекс.
+
+### Подменю `[ Darktec ]` и файл `/darktec.prefs`
+
+Настройки DarkTec живут в отдельном бинарном файле `/darktec.prefs` (`DarktecPrefsFormat.h`: 20 байт, magic `DRTC`, версия 2, CRC16), а не в `/prefs.json` ядра — чтобы правка не переписывала ядровые настройки.
+
+- Пункты: `Capacity` (3000/4000 мАч), `Screen on` (15s/30s/1m/5m/1h), `NF Speed` (100/250/500/1000 мс), `Radio mod`, `Back`.
+- Файл версии 1 (beeline 1.18.0) читается и конвертируется: порядок модулей там был другой.
+- Реле T2 (`RELAY`) в этот файл не входит: состояние намеренно не сохраняется.
+- `board.setDisplayOn()` вызывается из UI при включении/выключении панели — от этого зависит ток покоя в ETA.
+
+### Где что лежит
+
+- `variants/darktec/DarktecBoard.h` / `.cpp` — пины радио и платы, инициализация, питание, зарядка, INA3221. Общий код для всех ролей.
+- `variants/darktec/DarktecPowerModel.h` / `DarktecPowerTables.h` — модель батареи (второй файл генерируемый).
+- `variants/darktec/DarktecSensorManager.h` — обёртка над сенсорами, здесь живёт реле.
+- `variants/darktec/DarktecPrefs.h` / `.cpp` / `DarktecPrefsFormat.h` — настройки `/darktec.prefs`.
+- `variants/darktec/DarktecSX1262Wrapper.h` — обёртка RadioLib: считает активность радио для модели питания.
+- `variants/darktec/variant.h` / `variant.cpp` — таблица `g_ADigitalPinMap`, перевод Arduino-пина в ногу nRF.
+- `variants/darktec/target.cpp` / `target.h` — сборка узла под роль, `MomentaryButton`, переключение RF-тракта (`darktec_radio_set_rf`).
+- `variants/darktec/platformio.ini` — секция `[Darktec]` и 8 `[env:...]`.
+- `examples/companion_radio/ui-new/UITask.cpp` / `.h` — весь интерфейс компаньона.
+- `src/helpers/NodePrefs.h` — хранение ядровых настроек (`/prefs.json`).
+- `tools/gen_darktec_power_tables.py` — генератор таблиц батареи, замеры вписаны в него.
+- `tools/check_power_model.py` — численная проверка модели на Python.
+- `tools/git_push.py` — push без мучений с credential helper.
+- `build-darktec-uf2.ps1` / `.cmd` — сборка и выкладка UF2.
+- `git_version.py` — подставляет номер коммита и дату в прошивку (pre-build).
+
+### Ловушка с номерами пинов
+
+На плате два способа нумерации, и в `platformio.ini` рядом соседствуют оба. Проверять `g_ADigitalPinMap` в `variant.cpp` перед любой правкой пинов.
+
+| Нога nRF | Arduino-пин | Занято под |
+|---|---|---|
+| P1.00 | 6 | `PIN_USER_BTN` / `PIN_BUTTON1` |
+| P0.11 | 7 | `PIN_BOARD_SCL` → `Wire.setPins()` |
+| P1.04 | 8 | `PIN_BOARD_SDA` → `Wire.setPins()` |
+| P0.24 | 5 | **T1** — `PIN_GPS_EN` |
+| P0.08 | 0 | **T2** — гейт VT3, **реле** (`DARKTEC_RELAY_PIN=0`, ключ `RELAY`) |
+| P0.06 | 1 | **T3** — `PIN_BUZZER`, гейт VT4 |
+| P0.17 | 2 | EN модуля E22P (у E22 — RXEN) |
+| P0.13 | 21 | `SX126X_POWER_EN`, `PIN_EXT_VCC` |
+| P0.31 | 17 | `PIN_VBAT_READ` / `PIN_BATTERY` |
+| P0.03 / P0.04 | 3 / 4 | `PIN_GPS_RX` / `PIN_GPS_TX` |
+
+**Устаревшие определения в `variant.h`:** `PIN_WIRE_SDA=6` / `PIN_WIRE_SCL=7` и `PIN_SERIAL1_TX=1` / `PIN_SERIAL1_RX=0` в сборке не используются. Реальная шина I2C задаётся в `DarktecBoard.cpp` через `Wire.setPins(8, 7)` — SDA `P1.04`, SCL `P0.11`. Определения Serial1 указывают на те же ноги P0.06 (буззер) и P0.08 (реле): **если буззер замолчал или заквакал странно — проверять, не поднялся ли Serial1 на P0.06.**
+
+### Транзисторы (по схеме V2.1)
+
+Четыре мосфета: три N-канальных `IRLML6344` (VT2, VT3, VT4) с резисторами 10 к на затворах (R30–R32), плюс `VT1` — P-канальный `AO3401A` во входной цепи зарядника CN3795 (защита от переполюсовки).
+
+| Имя в прошивке | Схема | Нога MCU | Arduino-пин | Что коммутирует |
+|---|---|---|---|---|
+| **T1** | VT2 (IRLML6344) | P0.24 | 5 | GPS: `-D PIN_GPS_EN=5` |
+| **T2** | VT3 (IRLML6344) | P0.08 | 0 | **реле**: `DARKTEC_RELAY_PIN=0`, ключ `RELAY` |
+| **T3** | VT4 (IRLML6344) | P0.06 | 1 | **буззер**: `-D PIN_BUZZER=1` |
+
+- «T1…T3» — шелкография платы, `VT2…VT4` — позиционные обозначения.
+- **T3 работает, писать ничего не нужно.** `-D PIN_BUZZER=1` задан во всех companion-env. Отдельного `PIN_BUZZER_EN` нет — включателем служит сам транзистор.
+- **T1 занят под GPS** (`PIN_GPS_EN`).
+- Обвязка питания: делитель VBAT 100к/100к на P0.31, шунт 50 мОм (`TELEM_INA3221_SHUNT_VALUE 0.050`).
+
+### Цепочка буззера (тройное нажатие кнопки)
+
+```
+3× нажатие BTN
+  -> UITask::handleTripleClick()
+  -> UITask::toggleBuzzer()
+  -> buzzer.quiet(true/false)         src/helpers/ui/buzzer.cpp
+  -> _node_prefs->buzzer_quiet + savePrefs()
+  -> showAlert("Buzzer: OFF" / "Buzzer: ON")
+```
+
+Звук играет RTTTL по `PIN_BUZZER`; `quiet()` лишь запрещает запуск мелодий. Мелодии — в `src/helpers/ui/buzzer.h`.
+
+### Удалённо управляемый выход RELAY (T2)
+
+Реле на T2 управляется **штатным механизмом настроек сенсоров** — протокол, приложение и каналы не трогались. Реализация целиком в `variants/darktec/DarktecSensorManager.h`, общий код для всех ролей.
+
+```
+sensor set RELAY ON | OFF | TOGGLE     ->  "RELAY: ON" / "RELAY: OFF"
+sensor get RELAY                       ->  "> ON" / "> OFF"
+sensor list                            ->  RELAY=... (и прочие настройки)
+```
+
+- Принимаются также `1`/`0`, `true`/`false`, `yes`/`no`, синоним ключа `t2`.
+- **При старте реле всегда выключено** — требование безопасности для силовой нагрузки. Состояние намеренно НЕ сохраняется в prefs.
+
+Как команда доходит до ноды:
+
+| Роль | Путь |
+|---|---|
+| Репитер | личка от админа → CLI (`simple_repeater/MyMesh.cpp`) |
+| Комнатный сервер | личка/пост от админа → CLI (`simple_room_server/MyMesh.cpp`) |
+| Сенсор | личка от админа → CLI (`simple_sensor/SensorMesh.cpp`) |
+| Компаньон | **Remote CLI**: личка вида `<CLI-PIN> <команда>` (`companion_radio/MyMesh.cpp`) или канал `TerminalCLI` |
+| Любая роль от приложения | serial/BLE `CMD_SET_CUSTOM_VAR` в формате `RELAY:ON` (`companion_radio/MyMesh.cpp`) |
+
+**Remote CLI у компаньона** — основной путь удалённого управления: PIN — 8 hex-символов от последних 4 байт **приватного** ключа (из публичного не выводится), смотреть командой `pin`, включается `set remote.cli on/off` (по умолчанию включено). Ответ приходит личкой, длинный режется на чанки `[1/N]`. Регистр в CLI важен: `sensor` — строчными.
+
+**Про «приватные» каналы:** канал в MeshCore — групповой на общем PSK, а не адресная переписка. У `TerminalCLI` PSK фиксированный и публичный (`MyMesh.h`). Для секретных команд — только Remote CLI по личке.
+
+**Не сделано осознанно:** ключ `GPSPWR` для T1 зарезервирован, но возвращает `false`. `setSettingValue("gps", ...)` управляет только данными, а чипу GPS после подачи питания нужна пауза на старт — иначе детект GPS сломается. Делать это надо вместе с драйвером GPS.
+
+### Сборка и UF2
+
+- PlatformIO живёт в `%USERPROFILE%\.platformio\penv\Scripts\pio.exe`, в PATH его нет.
+- `pio run -e <env>` — сборка. Первая после чистого клона качает тулчейн (~15 минут), дальше один env ~35 с.
+- Если падает `MissingPackageManifestError` или «библиотека не найдена» — удалить `.pio/libdeps/<env>` и запустить `pio pkg install -e <env>`.
+- **`pio run` НЕ создаёт `.uf2`.** Он делает `firmware.elf`, `firmware.hex` и `firmware.zip` (пакет Nordic DFU, UF2 внутри нет).
+- UF2 получается целью `create_uf2` (`pio run -e <env> -t create_uf2`) или скриптом `build-darktec-uf2.ps1`, кладётся в `out\uf2\` (каталог в `.gitignore`).
+- Проверка настоящего UF2: первые 4 байта `55 46 32 0a`, familyID (байты 28–31) `40 28 a5 ad` = `0xADA52840`, размер кратен 512.
+- **Кириллица в пути ломает `create_uf2`** (`uf2conv.py: error: unrecognized arguments`). Путь проекта — без кириллицы. Обход: `python bin\uf2conv\uf2conv.py <hex> -c -o <uf2> -f 0xADA52840`.
+- **ExecutionPolicy = Restricted** — `.ps1` напрямую не запускается: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-darktec-uf2.ps1 -Env <env>`.
+
+### Модель питания: SOC из напряжения, ETA интегрированием
+
+Три принципа:
+
+1. **Процент берётся из напряжения по реальной кривой разряда**, а не линейно между пустым и полным. Кривая снята с живой банки на токе 100 мА, в прошивке — 21 точка с шагом 5% (`SOC_CURVE_SHAPE`).
+2. **ETA считается интегрированием по кривой**, а не делением остатка на средний ток: ток ноды сам зависит от напряжения (25.7 мА при 4.2 В против 50 мА при 3.0 В на 33S).
+3. **Залитые мАч в SOC и ETA НЕ участвуют.** Нода заряжается от 55–70%, поэтому процент берётся из напряжения. Счётчик заряда — только «залито за сессию» для страницы INA.
+
+Как устроено:
+
+- **Напряжение берётся только в покое**: под передачей 1.5 А клеммы просажены, а в полке кривой 3–5 мВ на 1% SOC. Модель игнорирует напряжение, пока в эфире была активность менее 3 секунд назад (`OCV_QUIET_MS`).
+- **Ток — двумерная интерполяция**: по напряжению (4.2 / 3.7 / 3.0 В) и по мощности передатчика (−9 / 0 / 5 / 10 / 22 dBm).
+- **Скважность передачи** измеряется по факту (`onAfterTransmit` → `noteTxTime`), окно 10 минут.
+- **Окно напряжений по химии**: низ всегда 3000 мВ, верх — по `BATTERY_CHEMISTRY` (Li-ion 4200, LiFePO4 3650, LTO 2500).
+
+#### Замеры токов (амперметром)
+
+| Модуль | Экран выкл | Экран вкл | TX 22 | TX 10 | TX 5 | TX 0 | TX −9 |
+|---|---|---|---|---|---|---|---|
+| E22-900M33S @4.2 В | 25.7 | 32 | 1479 | 1258 | 1236 | 1103 | 717 |
+| E22-900M33S @3.0 В | 50 | 58 | 2795 | 2326 | 1928 | 1753 | 1088 |
+| E22P-868M30S @4.2 В | 44 | 50 | 1023 | 990 | 479 | 288 | 135 |
+| E22P-868M30S @3.0 В | 65 | 71 | 1515 | 1493 | 686 | 423 | 194 |
+
+- **E22-900M30S** — расчёт: TX = половина от 33S, покой как у 33S. **Не замерен, требует проверки.**
+- **HT-RA62** — расчёт: покой как у 33S, TX линейно по dBm. **Не замерен.**
+- У **E22P сильная нелинейность**: между 5 и 10 dBm ток прыгает почти вдвое (590 → 1124 мА при 3.7 В) — переключается режим усиления. Только таблица, никаких формул.
+- У **33S очень дорогой простой**: при 0 dBm 1228 мА против 332 мА у E22P. На 33S низкая мощность батарею почти не экономит.
+- **Вклад передачи больше, чем кажется**: при скважности 1% ETA падает с 93 до 66 часов.
+
+#### Заряд: компенсация падения на внутреннем сопротивлении
+
+Под зарядом 2 А клеммы пакета поднимаются почти до 4.2 В независимо от реального заряда: банка при 50% показывает 4.14 В, и без компенсации нода рисует 100%.
+
+- Решение: `V_банки = V_изм − I·R`, дальше как обычная разрядная кривая.
+- `R = 0.2448 Ом` — измерено сравнением зарядной и разрядной кривых при одинаковом SOC.
+- `IR_K = 1.05` — подбор; средняя ошибка SOC +0.7%, разброс −2.2…+3.9%.
+- Зарядная кривая 2 А лежит в таблицах как `CHARGE_CURVE_2A` — для справки.
+- **Во время заряда замер берётся сразу**, не дожидаясь тишины: ток заряда перебивает передачи, а компенсация делает замер пригодным.
+- Признак заряда — по току пакета от INA3221 (порог 20 мА), а не по напряжению.
+- **Знак тока определяется автоматически** (`PowerModel::learnCurrentPolarity()`): полярность шунта на разных платах разная, ошибка знаком переворачивает компенсацию. Не угадывать знак физических величин — это уже дважды приводило к ошибкам.
+
+#### О чём ещё надо помнить
+
+- **Значок батарейки берёт процент у модели** (`board.getSocPercent()`), а не из линейного пересчёта. Если модель ещё не получила замер — падение на линейную оценку, чтобы значок не мигал пустым на старте.
+- **Под зарядом слева от значка рисуется молния** (три заливки прямоугольниками: драйвер не умеет `drawLine`). В беззвучном режиме значок беззвучки сдвигается левее.
+- **На странице батареи выводится `Inow`** — ток текущего состояния, а не средний по разряду.
+
+#### Ограничения
+
+- **В полке кривой (30–50% SOC) 3–5 мВ на 1% SOC**, а напряжение меряется делителем 100к/100к через АЦП nRF52. Точность упирается в железо. Точнее было бы брать напряжение с INA3221 — не сделано.
+- **ETA зависит от наблюдаемой скважности** за последние 10 минут, а не от будущего трафика.
+- Модель тика кормится раз в 250 мс.
+
+### Интерфейс компаньона
+
+Все правки — в `examples/companion_radio/ui-new/UITask.cpp` и `UITask.h`.
+
+**Заставка:**
+
+```
+    [логотип MeshCore]        y=3
+    Dark Electronics          y=20
+    v1.18.0 #0eebaf2d         y=30
+    17 Oct 2026               y=42
+```
+
+- **Версия и номер коммита — одной строкой.** Метка сборки (`SE`) больше не разделяет модули — модуль теперь настройка, а номер говорит о ревизии кода. `v1.18.0 #0eebaf2d` = 17 символов при 21 влезающих.
+- Строка собирается в `_version_line[22]`: база версии плюс `#` и хвост после дефиса. Если хвоста нет — подставляется `_build_tag`.
+- **Дата сборки живая:** `git_version.py` подставляет `FIRMWARE_BUILD_DATE` на каждом `pio run`. Жёсткое `"14 Aug 2026"` в `MyMesh.h` — только запасной вариант.
+- **Проверка после сборки:** строка `[git_version] GIT_COMMIT = <хеш>` в выводе `pio run`. Нет её — на заставке будет версия без номера.
+- `FIRMWARE_VERSION_SUFFIX` теперь всегда `SE` и служит только запасным вариантом `_build_tag`.
+
+**Время горения экрана:** пункт `Screen on` в подменю `[ Darktec ]`, значения 15s / 30s / 1m / 5m / 1h, массив `AUTO_OFF_MS[5]`, индекс — `auto_off_idx` в `/darktec.prefs`.
+
+- Все места, где продлевался таймер, используют `autoOffMillis()` (читает prefs).
+- Экраны зовут `_task->extendAutoOff()`, а **не** трогают `_auto_off` напрямую — это приватное поле `UITask`.
+
+**Входящие сообщения:** показываем только с **первой** страницы главного экрана и ровно `MESSAGE_PREVIEW_MILLIS` = 10 секунд.
+
+- Признак «первая страница» — `curr == home && !isOnClockPage()`. На странице CLOCK своя логика (инлайн-показ PM по настройке `PM CLOCK`).
+- С других страниц сообщение копится в непрочитанных, экран не трогаем.
+- Автоскрытие: `MsgPreviewScreen::armAutoDismiss()` + `poll()`; флаг `_on_screen` ставится в `UITask::setCurrScreen()` — уход с экрана отменяет автоскрытие.
+- **Режим истории автоскрытие выключает.**
+- `poll()` у экранов вызывается из `UITask::loop()`.
+
+### Экраны компаньона (только у компаньона)
+
+| Экран | Что показывает |
+|---|---|
+| **шум** (`HomePage::NOISE`, `UI_NOISE_PAGE`) | шумовой пол в эфире: 64 столбика, сглаживание по 3 точкам; скорость `NF Speed` из `NOISE_SPEED_MS[]` = 100 / 250 / 500 / 1000 мс |
+| **INA** (`HomePage::INA`, `UI_INA_PAGE`) | два рельса INA3221 — батарея и зарядник: напряжение, ток, мощность, «залито за сессию» |
+| **батарея** (`HomePage::BATT`, `UI_BATT_PAGE`) | напряжение, SOC от модели, остаток в мАч, ETA, ток `Inow` |
+
+У репитера, комнаты, сенсора, KISS-модема и terminal chat этих экранов нет — своя простая отрисовка.
+
+## Версия и база
+
+- Прошивка — **1.18.0** (beeline09 `south_edition`, `83f2b0b4`), рабочая ветка — `feat/darktec-1.18`.
+- Поверх базы перенесены наши фичи с 1.17.1: экраны шума/INA/батареи, подменю `[ Darktec ]`, реле T2, `set radio.module`, наша модель SOC/ETA и заставка. Его `DarktecSoc*`/ETA удалены.
+- Старая ветка 1.17.1 сохранена тегом `backup/darktec-1.17.1-final` (`c24f7583`) — при нужде достаётся одной командой.
+- PR #35 (beeline09 `south_edition`) обновляется пушем этой ветки в `feat/darktec-e22p`.

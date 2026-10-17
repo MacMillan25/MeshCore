@@ -13,25 +13,52 @@
 #define P_LORA_MOSI  14 //P1.15 47
 #define SX126X_POWER_EN 21 //P0.13 13
 
-// Тип радиомодуля (spec 0001 FR-2, D-6): 0 HT-RA62, 1 E22-900M30S (дефолт),
-// 2 E22P-868M30S, 3 E22-900M33S. У E22P пин 6 модуля — это EN (общий
-// включатель RF-тракта, активный высокий): RadioLib вёл его как RXEN и на
-// передаче опускал в 0, гася тракт целиком. При модуле 2 пин выводится
-// из-под библиотеки (SX126X_RXEN не задаётся) и держится высоким вручную
-// в DarktecBoard::begin(). Остальные модули — текущая разводка.
-#ifndef DARKTEC_RADIO_MODULE
-#define DARKTEC_RADIO_MODULE 1
+/*
+ * Управление RF-трактом модуля. Разводка платы (обе ревизии):
+ *   пин 6 модуля -> P0.17 (Arduino 2)
+ *   пин 7 модуля -> DIO2 модуля (пин 8), напрямую, без ноги MCU
+ *
+ * Направление передачи задаёт DIO2, и его трогать не нужно: чип SX1262 держит
+ * его высоким при передаче и низким в остальное время (SX126X_DIO2_AS_RF_SWITCH).
+ * На железе проверено — TX = 3.3 В, RX = 0 В, работает на обоих модулях.
+ *
+ * Пин 6 у E22 и E22P означает РАЗНОЕ. Раньше это разводилось флагом сборки,
+ * теперь модуль — настройка и переключается на лету:
+ *
+ *   E22-900M33S / E22-900M30S / HT-RA62 — пин 6 это RXEN. RadioLib ведёт ногу
+ *                  по таблице RF-ключа: при приёме высокий, на передаче в 0.
+ *                  Работает.
+ *
+ *   E22P-868M30S — пин 6 это EN, общий включатель тракта. Если отдать его
+ *                  RadioLib, на передаче нога уходит в 0 и тракт выключается:
+ *                  приём пропадает, слышно только в упор. Поэтому у E22P пины
+ *                  RF-ключа отключены (setRfSwitchPins(NC, NC)), и пин 6
+ *                  держится высоким вручную — в приёме, передаче и покое.
+ *
+ * RadioLib НЕ получает SX126X_RXEN/TXEN при инициализации: иначе он захватил
+ * бы пин 6 раньше, чем прочитана настройка. RF-конфигурация выдаётся позже,
+ * из target.cpp (darktec_radio_set_rf), и меняется при смене модуля.
+ */
+#define DARKTEC_RF_SWITCH_PIN 2 // P0.17 — пин 6 модуля
+
+// Модуль по умолчанию до загрузки настроек: 0=33S, 1=30S, 2=RA62, 3=E22P.
+// Настройка prefs перекрывает это сразу после the_mesh.begin().
+#ifndef DARKTEC_RADIO_DEFAULT_MODULE
+#define DARKTEC_RADIO_DEFAULT_MODULE 0
 #endif
-#if DARKTEC_RADIO_MODULE < 0 || DARKTEC_RADIO_MODULE > 3
-#error "DARKTEC_RADIO_MODULE должен быть 0 (HT-RA62), 1 (E22-900M30S), 2 (E22P-868M30S) или 3 (E22-900M33S)"
-#endif
-#if DARKTEC_RADIO_MODULE == 2
-// EN E22P: P0.17 (Arduino 2) — вручную из begin(), RadioLib не трогает.
-#define DARKTEC_RADIO_EN_PIN 2
-#else
-#define SX126X_RXEN 2 //P0.17
-#endif
-#define SX126X_TXEN RADIOLIB_NC
+
+// Индексы модулей — общие для prefs, модели питания и строки настроек.
+#define DARKTEC_MODULE_E22_33S 0
+#define DARKTEC_MODULE_E22_30S 1
+#define DARKTEC_MODULE_HT_RA62 2
+#define DARKTEC_MODULE_E22P    3
+#define DARKTEC_MODULE_COUNT   4
+
+// RF-часть переключения модуля живёт в target.cpp: только там есть объект
+// радио. Board её только зовёт, поэтому объявление здесь, а не включение
+// target.h (иначе циклическая зависимость).
+void darktec_radio_set_rf(uint8_t module_idx);
+
 #define SX126X_DIO2_AS_RF_SWITCH  true
 #define SX126X_DIO3_TCXO_VOLTAGE (1.8f)
 
@@ -42,6 +69,7 @@
 #endif
 
 #include "DarktecAdcPower.h"
+#include "DarktecPowerModel.h"
 #include <Adafruit_INA3221.h>
 
 // INA3221: зарядка пакета на 2-м канале (Adafruit 0-based: CH1=0, CH2=1, CH3=2).
@@ -54,8 +82,72 @@
 #ifndef DARKTEC_INA_CHARGE_CH
 #define DARKTEC_INA_CHARGE_CH 1
 #endif
-// Пороги детекции заряда заменены автоматом DarktecSocModel (FR-34).
+#ifndef DARKTEC_CHARGE_ON_MA
+#define DARKTEC_CHARGE_ON_MA  120.0f
+#endif
+#ifndef DARKTEC_CHARGE_OFF_MA
+#define DARKTEC_CHARGE_OFF_MA 100.0f
+#endif
+// 3-й канал INA — ток самого пакета. Именно его интегрирует счётчик мАч:
+// зарядник отдаёт больше, чем доходит до банки (часть уходит на питание ноды).
+#ifndef DARKTEC_INA_BATT_CH
+#define DARKTEC_INA_BATT_CH   2
+#endif
+// Порог «зарядник подключён» по напряжению шины CHRG. Пока зарядник есть,
+// счётчик копит; когда пропал — замирает до следующего подключения.
+#ifndef DARKTEC_CHARGE_DETECT_V
+#define DARKTEC_CHARGE_DETECT_V 4.5f
+#endif
 
+// Тик интегрирования тока. Не привязан к обновлению экрана: счётчик живёт в
+// loop() и считает с этой частотой независимо от того, что показывает дисплей.
+// 250 мс — один I2C-замер на тик, ошибка прямоугольного суммирования на
+// порядок ниже, чем нестабильность самого шунта.
+#ifndef DARKTEC_CHARGE_TICK_MS
+#define DARKTEC_CHARGE_TICK_MS     250
+#endif
+// Пропуск длиннее этого — залипший суперцикл (запись во флеш, рывок BLE).
+// Промежуток не выбрасывается, а обрезается до этой величины: выбросить тик
+// значит молча потерять заряд, а обрезать — учесть его по последнему замеру.
+#ifndef DARKTEC_CHARGE_MAX_GAP_MS
+#define DARKTEC_CHARGE_MAX_GAP_MS  5000
+#endif
+
+// ---- Discharge model -------------------------------------------------------
+// Ток разряда на этой плате измерить нечем, поэтому он моделируется: тик
+// умножается на ток текущего состояния. Значения измерены мультиметром на
+// этой ревизии; после правок железа их надо перемерить.
+#ifndef DARKTEC_I_DISPLAY_ON_MA
+#define DARKTEC_I_DISPLAY_ON_MA    33.0f    // экран горит, радио в приёме
+#endif
+#ifndef DARKTEC_I_DISPLAY_OFF_MA
+#define DARKTEC_I_DISPLAY_OFF_MA   28.0f    // экран погашен, радио в приёме
+#endif
+// Передача E22 при TX 22 дБм. Импульс, поэтому считается не тиком, а по
+// фактической длительности передачи — пакет бывает короче одного тика.
+#ifndef DARKTEC_I_TX_MA
+#define DARKTEC_I_TX_MA            1560.0f
+#endif
+// Паспортная ёмкость пакета. Служит только начальной точкой отсчёта: после
+// первой зарядки счётчик берёт фактически залитые мАч как новое «полное».
+#ifndef DARKTEC_BATT_CAPACITY_MAH
+#define DARKTEC_BATT_CAPACITY_MAH  3000.0f
+#endif
+// Ток, ниже которого зарядник считается завершившим заряд (примерно C/20 для
+// пакета 3000 мАч), и сколько он должен держаться, чтобы это не был провал.
+// Полный заряд — единственная точка, где счётчик достоверно знает остаток,
+// поэтому именно здесь он прищёлкивается к 100% и сбрасывает накопленный дрейф.
+#ifndef DARKTEC_CHARGE_FULL_MA
+#define DARKTEC_CHARGE_FULL_MA       150.0f
+#endif
+#ifndef DARKTEC_CHARGE_FULL_HOLD_MS
+#define DARKTEC_CHARGE_FULL_HOLD_MS  60000
+#endif
+// Постоянная времени сглаживания среднего потребления для ETA. Самодостаточна:
+// не зависит от того, когда начался разряд, и переживает перезагрузку.
+#ifndef DARKTEC_LOAD_TAU_MS
+#define DARKTEC_LOAD_TAU_MS          600000UL   // 10 минут
+#endif
 
 class DarktecBoard : public NRF52BoardDCDC {
 protected:
@@ -70,7 +162,25 @@ protected:
   uint32_t _tx_hold_until = 0;
   uint32_t _rx_hold_until = 0;
 
+  // Charge accounting, advanced by loop() once a second. Считает только
+  // «сколько залито за сессию» для страницы INA — в SOC и ETA НЕ участвует.
+  float    _charge_mah = 0.0f;        // mAh poured into the pack this session
+  bool     _charger_present = false;
+  uint32_t _charge_last_ms = 0;
+  uint32_t _charge_session_ms = 0;
+  uint32_t _full_hold_ms = 0;         // сколько ток заряда держится ниже порога
+
+  // Состояние экрана и скважность передачи — входы модели питания.
+  bool     _display_on = false;       // pushed in by the UI, picks the idle current
+  uint32_t _tx_window_start = 0;
+
+  // Модель питания: SOC из напряжения по реальной кривой и ETA интегрированием.
+  darktec::PowerModel _pm;
+  uint8_t  _radio_module = DARKTEC_RADIO_DEFAULT_MODULE;
+  int8_t   _tx_dbm = 22;              // выставленная мощность: нужна CLI и модели
+
   void pollChargeSense();
+  bool readInaShuntReady();
 #ifdef NRF52_POWER_MANAGEMENT
   void initiateShutdown(uint8_t reason) override;
 #endif
@@ -80,6 +190,84 @@ public:
   void begin();
   bool isCharging();
   bool isExternalPowered() override;
+
+  // Periodic housekeeping, called from the example superloop. Keeps the charge
+  // counter running whatever screen is on — and whatever the screen is doing,
+  // including being off.
+  void loop() override;
+
+  // Charge counter for the INA page. mAh accumulated into the pack since the
+  // current charger was attached; frozen while no charger is present, and
+  // zeroed when the next one appears.
+  uint32_t getChargeMah() const { return (uint32_t)(_charge_mah + 0.5f); }
+  bool isChargerPresent() const { return _charger_present; }
+  uint32_t getChargeSessionSecs() const { return _charge_session_ms / 1000; }
+
+  // --- Модель питания: SOC, остаток, ETA -------------------------------------
+
+  // Остаток ёмкости выводится из ПРОЦЕНТА, который взят из напряжения.
+  // Залитые мАч сюда не входят: нода может заряжаться от 55% или 70%.
+  uint32_t getRemainMah() const override { return _pm.getRemainMah(); }
+  uint32_t getCapacityMah() const { return _pm.getCapacityMah(); }
+
+  // Сколько процентов показывает модель (по кривой разряда, не линейно).
+  uint8_t getSocPercent() const { return (uint8_t)(_pm.getSocPercent() + 0.5f); }
+  // false, пока модель не получила ни одного пригодного замера напряжения:
+  // UI в этом случае показывает грубую линейную оценку, а не пустой значок.
+  bool powerModelReady() const { return _pm.hasSoc(); }
+  // Идёт ли заряд прямо сейчас — по току пакета, а не по напряжению.
+  bool isPowerModelCharging() const { return _pm.isCharging(); }
+  // Напряжение покоя, по которому посчитан процент.
+  uint16_t getOcvMilliVolts() const { return _pm.getOcvMilliVolts(); }
+
+  // Средний ток за оставшийся разряд. Это честное среднее по остатку,
+  // а не сглаженное мгновенное значение.
+  float getAverageLoadMa() const { return _pm.averageLoadMa(); }
+  // Ток, который модель приписывает текущему состоянию, для глаз на экране.
+  float getStateLoadMa() const { return _pm.currentNowMa(_txing); }
+  // Доля времени в эфире за последнее окно наблюдения (0..1).
+  float getTxDutyFraction() const { return _pm.txDutyFraction(); }
+
+  uint32_t getEtaMinutes() const { return _pm.etaMinutes(); }
+
+  // Модуль и мощность передатчика: то, чем модель различает железо.
+  // Вызывается и из UI компаньона, и из CLI — чтобы у всех ролей было одно.
+  void setPowerModel(uint8_t module, int8_t tx_dbm, float capacity_mah) {
+    _pm.setModule(module);
+    _pm.setTxPowerDbm(tx_dbm);
+    _pm.setCapacityMah(capacity_mah);
+  }
+  void setTxPowerDbm(int8_t tx_dbm) {
+    _pm.setTxPowerDbm(tx_dbm);
+    _tx_dbm = tx_dbm;
+  }
+  int8_t getTxPowerDbm() const { return _tx_dbm; }
+
+  // Отдельно модуль — UI меняет его из настроек, не трогая мощность и ёмкость.
+  void setModule(uint8_t module) { _pm.setModule(module); }
+
+  // Переключение впаянного модуля на лету: обновляет модель питания (ETA) и
+  // переводит пин 6 в нужный режим — RXEN под RadioLib для E22/30S/RA62 или
+  // постоянно высокий EN для E22P. Вызывается из UI и CLI.
+  bool setRadioModule(uint8_t idx) override;
+  int8_t getRadioModule() const override { return (int8_t)_radio_module; }
+
+  // Оставлено ради совместимости со старым интерфейсом MeshCore: значение,
+  // сохранённое предыдущей прошивкой, теперь не используется — процент
+  // берётся из напряжения.
+  void setRemainMah(uint32_t mah) override { (void)mah; }
+
+  void setDisplayOn(bool on) override {
+    _display_on = on;
+    _pm.setDisplayOn(on);
+  }
+
+  // Старый интерфейс: UI присылал ток модуля числом. Теперь модель берёт ток
+  // из таблиц по модулю и мощности, поэтому число игнорируем.
+  void setTxCurrentMa(float ma) override { (void)ma; }
+
+  void setBatteryCapacityMah(float mah) override { _pm.setCapacityMah(mah); }
+
   bool isLoRaActivity() const {
     return _txing || _rxing
         || (int32_t)(millis() - _tx_hold_until) < 0
@@ -87,16 +275,23 @@ public:
   }
   void setLoRaReceiving(bool v) { _rxing = v; }
   void onLoRaPacketReceived() { _rx_hold_until = millis() + 80; }
-  void onBeforeTransmit() override { _txing = true; }
+  void onBeforeTransmit() override {
+    _txing = true;
+    _tx_window_start = millis();
+  }
   void onAfterTransmit() override {
     _txing = false;
     _tx_hold_until = millis() + 80;  // короткий хвост, чтобы вспышка была видна на OLED
+    // Фактическое время в эфире, измеренное здесь, а не тиком: пакет бывает
+    // короче тика, и целый тик многократно завысил бы короткий импульс 1.5 А.
+    // Уходит в модель как скважность передачи — она нужна для ETA.
+    uint32_t dur = millis() - _tx_window_start;
+    if (dur < 20000) _pm.noteTxTime(dur);
   }
 
   #define BATTERY_SAMPLES 8
 
-  // Сырое чтение АЦП без побочных эффектов (защита юга, SOC-модель).
-  uint16_t readBattMvRaw() {
+  uint16_t getBattMilliVolts() override {
     analogReadResolution(12);
 
     uint32_t raw = 0;
@@ -105,10 +300,6 @@ public:
     }
     raw = raw / BATTERY_SAMPLES;
     return (uint16_t)(adc_mult * raw);
-  }
-
-  uint16_t getBattMilliVolts() override {
-    return readBattMvRaw();
   }
 
   bool setAdcMultiplier(float multiplier) override {

@@ -1,54 +1,52 @@
 #pragma once
-// Чистый формат файла настроек Darktec `/darktec.prefs` (spec 0001, FR-14..19).
-// Без Arduino — подключается и в native-тестах. Структура NodePrefs ядра
-// не затрагивается; ФС — та же InternalFS (LittleFS), что у ядра.
+// Формат файла настроек DarkTec `/darktec.prefs`.
+// Чистый (без Arduino) — подключается и в native-тестах.
+//
+// Что здесь живёт: то, что относится к железу DarkTec и не имеет смысла
+// для других плат — модель аккумулятора (ёмкость), впаянный радиомодуль и
+// две настройки экранов. Остальное (язык, часы, сообщения) — в NodePrefs ядра.
+//
+// Формат бинарный намеренно: файл отдельный от /prefs.json, чтобы правка
+// настроек DarkTec не переписывала ядровые.
 
 #include <stddef.h>
 #include <stdint.h>
 
-// Макросы BATTERY_CHEMISTRY/BATTERY_CELLS (дефолты из флагов сборки) —
-// самодостаточный заголовок варианта (только макросы, годится и для native).
 #include "battery_chemistry.h"
 
 namespace DarktecPrefsFormat {
 
-// Коды химии — совпадают с DarktecSoc::Chem (одна нумерация на вариант).
-enum ChemCode : uint8_t { CHEM_LIION = 0, CHEM_LIFEPO4 = 1, CHEM_LTO = 2 };
-
-// Коды радиомодулей (FR-2).
+// Индексы радиомодулей. Порядок ОБЯЗАН совпадать с подписями в UI и с
+// таблицами токов в DarktecPowerTables.h (модель берёт ток по индексу):
+//   0 E22-900M33S, 1 E22-900M30S, 2 HT-RA62, 3 E22P-868M30S.
+// 0..2 — пин 6 модуля это RXEN под RadioLib; 3 — EN, держится высоким вручную.
 enum ModuleCode : uint8_t {
-  MOD_HT_RA62 = 0,
+  MOD_E22_900M33S = 0,
   MOD_E22_900M30S = 1,
-  MOD_E22P_868M30S = 2,
-  MOD_E22_900M33S = 3,
+  MOD_HT_RA62 = 2,
+  MOD_E22P_868M30S = 3,
 };
 
 struct Settings {
-  uint16_t capacity_mah;  // ёмкость ЯЧЕЙКИ, mAh (FR-1)
-  uint8_t chem;           // ChemCode (FR-9)
-  uint8_t cells;          // 1..2; 2 — только LTO (FR-10)
-  uint8_t module;         // ModuleCode (FR-2, FR-11)
-  uint16_t charge_ma;     // номинал зарядного тока платы (FR-31)
+  uint16_t capacity_mah;  // ёмкость пакета, mAh (3000 / 4000)
+  uint8_t module;         // ModuleCode
+  uint8_t auto_off_idx;   // 0=15s, 1=30s, 2=1m, 3=5m, 4=1h
+  uint8_t noise_idx;      // 0=100ms, 1=250ms, 2=500ms, 3=1000ms
 };
 
 constexpr uint16_t kCapacityMin = 500;
 constexpr uint16_t kCapacityMax = 30000;
-constexpr uint16_t kCapacityDefault = 4000;
-constexpr uint16_t kChargeMin = 100;
-constexpr uint16_t kChargeMax = 3000;
-constexpr uint16_t kChargeDefault = 2000;
+constexpr uint16_t kCapacityDefault = 3000;
 
-constexpr uint8_t kWireVersion = 1;
+constexpr uint8_t kAutoOffCount = 5;
+constexpr uint8_t kNoiseCount = 4;
+
+constexpr uint8_t kWireVersion = 2;
 constexpr uint8_t kWireSize = 20;  // magic(4) + ver(1) + payload(13) + crc(2)
 constexpr uint8_t kPayloadSize = 13;
 
-// Починка недопустимых значений: диапазоны и правило «2S — только LTO».
-// (объявлена до buildFlagDefaults, определение ниже по файлу)
 inline void sanitize(Settings& s);
 
-// Дефолт — из флагов сборки (FR-1/2/3, FR-31); макры химии/модуля приходят
-// из battery_chemistry.h / platformio.ini. В native-тестах макров нет —
-// берутся константы по умолчанию.
 inline Settings buildFlagDefaults() {
   Settings s{};
 #if defined(BATTERY_CAPACITY_MAH)
@@ -56,43 +54,20 @@ inline Settings buildFlagDefaults() {
 #else
   s.capacity_mah = kCapacityDefault;
 #endif
-#if defined(BATTERY_CHEMISTRY)
-  s.chem = (uint8_t)((int)BATTERY_CHEMISTRY - 1);  // BATTERY_CHEM_LIION=1 → 0
-#else
-  s.chem = CHEM_LIION;
-#endif
-#if defined(BATTERY_CELLS)
-  s.cells = (uint8_t)BATTERY_CELLS;
-#else
-  s.cells = 1;
-#endif
-#if defined(DARKTEC_RADIO_MODULE)
-  s.module = (uint8_t)DARKTEC_RADIO_MODULE;
-#else
-  s.module = MOD_E22_900M30S;
-#endif
-#if defined(DARKTEC_CHARGE_CURRENT_MA)
-  s.charge_ma = (uint16_t)DARKTEC_CHARGE_CURRENT_MA;
-#else
-  s.charge_ma = kChargeDefault;
-#endif
+  s.module = MOD_E22_900M33S;
+  s.auto_off_idx = 0;
+  s.noise_idx = 2;  // 500 мс — как было в 1.17.1
   sanitize(s);
   return s;
 }
 
-// Починка недопустимых значений: диапазоны и правило «2S — только LTO».
 inline void sanitize(Settings& s) {
   if (s.capacity_mah < kCapacityMin || s.capacity_mah > kCapacityMax) {
     s.capacity_mah = kCapacityDefault;
   }
-  if (s.charge_ma < kChargeMin || s.charge_ma > kChargeMax) {
-    s.charge_ma = kChargeDefault;
-  }
-  if (s.chem > CHEM_LTO) s.chem = CHEM_LIION;
-  if (s.module > MOD_E22_900M33S) s.module = MOD_E22_900M30S;
-  if (s.cells < 1) s.cells = 1;
-  if (s.cells > 2) s.cells = 2;
-  if (s.chem != CHEM_LTO && s.cells > 1) s.cells = 1;  // US-6/FR-10
+  if (s.module > MOD_E22P_868M30S) s.module = MOD_E22_900M33S;
+  if (s.auto_off_idx >= kAutoOffCount) s.auto_off_idx = 0;
+  if (s.noise_idx >= kNoiseCount) s.noise_idx = 2;
 }
 
 // CRC16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
@@ -107,9 +82,8 @@ inline uint16_t crc16(const uint8_t* data, uint32_t len) {
   return crc;
 }
 
-// Сериализация: "DRTC" + version + payload(capacity_le16, chem, cells,
-// module, charge_le16, reserved 6×0x00) + crc16(version+payload). Возвращает
-// kWireSize или 0, если буфер мал.
+// "DRTC" + version + payload(capacity_le16, module, auto_off, noise, 8×0x00)
+// + crc16(version+payload).
 inline size_t serialize(const Settings& s, uint8_t* buf, size_t len) {
   if (len < kWireSize) return 0;
   Settings t = s;
@@ -118,32 +92,47 @@ inline size_t serialize(const Settings& s, uint8_t* buf, size_t len) {
   buf[4] = kWireVersion;
   buf[5] = (uint8_t)(t.capacity_mah & 0xFF);
   buf[6] = (uint8_t)(t.capacity_mah >> 8);
-  buf[7] = t.chem;
-  buf[8] = t.cells;
-  buf[9] = t.module;
-  buf[10] = (uint8_t)(t.charge_ma & 0xFF);
-  buf[11] = (uint8_t)(t.charge_ma >> 8);
-  for (int i = 0; i < 6; i++) buf[12 + i] = 0x00;  // резерв (FR-17)
+  buf[7] = t.module;
+  buf[8] = t.auto_off_idx;
+  buf[9] = t.noise_idx;
+  for (int i = 0; i < 8; i++) buf[10 + i] = 0x00;
   const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
   buf[18] = (uint8_t)(crc & 0xFF);
   buf[19] = (uint8_t)(crc >> 8);
   return kWireSize;
 }
 
-// Обратное преобразование: false при битой магии/версии/CRC. Успешный
-// результат проходит sanitize (старшие версии могут нести незнакомый резерв).
+// v1 (прошивки beeline 1.18.0): capacity(2), chem, cells, module, charge(2).
+// Порядок модулей был другим (0 RA62, 1 30S, 2 E22P, 3 33S) — переводим.
+inline bool parseV1(const uint8_t* buf, size_t len, Settings& out) {
+  if (len < kWireSize) return false;
+  const uint16_t crc_stored = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
+  if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
+  Settings s{};
+  s.capacity_mah = (uint16_t)(buf[5] | ((uint16_t)buf[6] << 8));
+  const uint8_t old_module = buf[9];
+  static const uint8_t kMap[4] = { MOD_HT_RA62, MOD_E22_900M30S,
+                                   MOD_E22P_868M30S, MOD_E22_900M33S };
+  s.module = (old_module <= 3) ? kMap[old_module] : MOD_E22_900M33S;
+  s.auto_off_idx = 0;
+  s.noise_idx = 2;
+  sanitize(s);
+  out = s;
+  return true;
+}
+
 inline bool parse(const uint8_t* buf, size_t len, Settings& out) {
   if (len < kWireSize) return false;
   if (buf[0] != 'D' || buf[1] != 'R' || buf[2] != 'T' || buf[3] != 'C') return false;
+  if (buf[4] == 1) return parseV1(buf, len, out);
   if (buf[4] != kWireVersion) return false;
   const uint16_t crc_stored = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
   if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
   Settings s{};
   s.capacity_mah = (uint16_t)(buf[5] | ((uint16_t)buf[6] << 8));
-  s.chem = buf[7];
-  s.cells = buf[8];
-  s.module = buf[9];
-  s.charge_ma = (uint16_t)(buf[10] | ((uint16_t)buf[11] << 8));
+  s.module = buf[7];
+  s.auto_off_idx = buf[8];
+  s.noise_idx = buf[9];
   sanitize(s);
   out = s;
   return true;

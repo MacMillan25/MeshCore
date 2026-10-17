@@ -96,6 +96,21 @@ public:
 
   virtual bool handleCommand(const char* command, uint32_t sender_timestamp, char* reply) { return false; }
 
+  // --- DarkTec: board-supplied power model and runtime RF routing ----------
+  // Kept on the base class with no-op defaults so every other board is
+  // unaffected. Darktec overrides them: the UI pushes the display state, the
+  // pack capacity and the fitted module, and asks the board for SOC/ETA.
+  virtual void setDisplayOn(bool on) { /* no op */ }
+  virtual void setBatteryCapacityMah(float mah) { /* no op */ }
+  virtual uint32_t getRemainMah() const { return 0; }
+  virtual void setRemainMah(uint32_t mah) { /* no op */ }
+  virtual void setTxCurrentMa(float ma) { /* no op */ }
+  // Fitted radio module on boards whose RF front end can be rerouted at runtime.
+  // Darktec carries E22 (pin 6 = RXEN), E22P (pin 6 = EN), 30S and RA62 on one
+  // build, so the choice is a setting rather than a compile flag.
+  virtual bool setRadioModule(uint8_t idx) { return false; }
+  virtual int8_t getRadioModule() const { return -1; }
+
   // Called from the example main loops. Lets a board feed its watchdog and
   // run periodic housekeeping. Default no-op.
   virtual void loop() { /* no op */ }
