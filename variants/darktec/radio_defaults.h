@@ -5,7 +5,7 @@
  * Только variants/darktec — переопределяет LORA_* из [arduino_base].
  *
  *   freq 869.075 МГц, BW 62.5 кГц, SF 8, CR 8, TX 22 дБм
- *   (Краснодарский край / Адыгея)
+ *   (региональная предустановка по умолчанию)
  *
  * On-demand / lab: DARKTEC_RADIO_CUSTOM + LORA_* задаются в generated
  * .pio/darktec_ondemand_defs.h через -include (не через -U/-D в
