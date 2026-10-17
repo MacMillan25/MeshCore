@@ -297,6 +297,29 @@ sensor list                            ->  RELAY=... (и прочие настр
 - **Режим истории автоскрытие выключает**: там пользователь листает архив и выйдет сам.
 - `poll()` у экранов вызывается из `UITask::loop()`; если добавляешь новый экран с `poll()`, проверь, что он там вызывается.
 
+## РЕШЕНИЕ 17.10.2026: остаёмся на 1.17.1
+
+Владелец решил **полностью вернуться на ветку eat/darktec-e22p (v1.17.1)**
+и прекратить перенос на новую базу beeline09 (v1.18.0).
+
+**Почему.** Перенос отнял много времени и при этом терял функционал: на новой
+базе не было ни страницы шума, ни INA, ни батареи с ETA — всё это наш
+собственный код. Вдобавок она сломала бы PR #35, который как раз про E22P:
+в новой базе E22P нет вообще.
+
+**Что сделано при откате:**
+
+- рабочая папка на eat/darktec-e22p, HEAD 0ad19f5, версия 1.17.1;
+- все 16 прошивок пересобраны начисто и лежат в out\uf2\ (8 SE + 8 E22P);
+- ветка port/darktec-upstream удалена с GitHub, но **работа не потеряна**:
+  локальный тег ackup/base-1.18.0-port = 907d92de (8 коммитов);
+- каталог out\uf2-new (прошивки 1.18.0) убран.
+
+**Если когда-нибудь понадобится вернуться к переносу:** тег
+ackup/base-1.18.0-port содержит реле, измеренную кривую батареи,
+компенсацию заряда, ETA, заставку, время экрана, входящие по 10 секунд
+и все три экрана. Восстанавливается одной командой.
+
 ## Cursor Cloud specific instructions
 
 This repo is the **MeshCore `south_edition` firmware** — embedded C++ built with **PlatformIO** (Arduino framework). There are **no servers, databases, or long-running services**; the product is firmware binaries flashed onto LoRa radio boards. "Running the app" without physical hardware means (a) running the native host unit tests and (b) compiling a firmware target into a `.bin`/`.uf2`.
