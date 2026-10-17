@@ -335,4 +335,9 @@ public:
 
   // Hibernate / CLI: SYSTEMOFF. Защита батареи — ADC-wait в initiateShutdown.
   void powerOff() override;
+
+  // CLI-команды DarkTec. Компаньон разбирает команды сам и до CommonCLI
+  // не доходит, поэтому держим их здесь — работает у всех ролей.
+  bool handleCommand(const char* command, uint32_t sender_timestamp,
+                     char* reply) override;
 };

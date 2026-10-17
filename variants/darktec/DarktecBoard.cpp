@@ -284,3 +284,68 @@ bool chargeActive() {
 }
 
 }  // namespace DarktecPowerState
+
+// CLI DarkTec. Компаньон разбирает команды в MyMesh::handleCommand и до
+// CommonCLI не доходит, поэтому команды живут на плате — работают у всех ролей.
+bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
+                                 char* reply) {
+  (void)sender_timestamp;
+  DarktecPrefsFormat::Settings s = DarktecPrefs::get();
+
+  if (memcmp(command, "set radio.module ", 17) == 0) {
+    int idx = atoi(&command[17]);
+    if (idx < 0 || idx > 3) {
+      strcpy(reply, "Error: module must be 0..3");
+      return true;
+    }
+    s.module = (uint8_t)idx;
+    DarktecPrefs::save(s);
+    setRadioModule((uint8_t)idx);
+    sprintf(reply, "OK - module %d", idx);
+    return true;
+  }
+  if (memcmp(command, "get radio.module", 16) == 0) {
+    sprintf(reply, "> %d", (int)DarktecPrefs::get().module);
+    return true;
+  }
+  if (memcmp(command, "set darktec.capacity ", 21) == 0) {
+    int mah = atoi(&command[21]);
+    if (mah < DarktecPrefsFormat::kCapacityMin ||
+        mah > DarktecPrefsFormat::kCapacityMax) {
+      sprintf(reply, "Error: capacity %u..%u",
+              (unsigned)DarktecPrefsFormat::kCapacityMin,
+              (unsigned)DarktecPrefsFormat::kCapacityMax);
+      return true;
+    }
+    s.capacity_mah = (uint16_t)mah;
+    s.capacity_mode = DarktecPrefsFormat::CAP_USER;
+    DarktecPrefs::save(s);
+    setBatteryCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(s));
+    sprintf(reply, "OK - %d mAh", mah);
+    return true;
+  }
+  if (memcmp(command, "set darktec.capmode ", 20) == 0) {
+    const char* v = &command[20];
+    if (memcmp(v, "user", 4) == 0) {
+      s.capacity_mode = DarktecPrefsFormat::CAP_USER;
+    } else if (atoi(v) == 3000) {
+      s.capacity_mode = DarktecPrefsFormat::CAP_3000;
+    } else if (atoi(v) == 4000) {
+      s.capacity_mode = DarktecPrefsFormat::CAP_4000;
+    } else {
+      strcpy(reply, "Error: capmode user|3000|4000");
+      return true;
+    }
+    DarktecPrefs::save(s);
+    setBatteryCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(s));
+    sprintf(reply, "OK - %u mAh",
+            (unsigned)DarktecPrefsFormat::effectiveCapacityMah(s));
+    return true;
+  }
+  if (memcmp(command, "set adc.multiplier ", 19) == 0) {
+    setAdcMultiplier(atof(&command[19]));
+    strcpy(reply, "OK");
+    return true;
+  }
+  return false;
+}
