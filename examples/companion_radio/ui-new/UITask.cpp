@@ -1448,10 +1448,12 @@ public:
 
       // Метки BATT/CHRG отступают от левой рамки: вплотную к линии буквы
       // слипаются с ней и читаются тяжелее.
+      // Три числовых столбца одной ширины: в V, A и W по четыре знака
+      // («3.93», «0.00»), поэтому и места им нужно одинаково.
       const int col_label_x = 3;
-      const int col_v_x = 38, col_v_w = 32;
-      const int col_a_x = 71, col_a_w = 26;
-      const int col_w_x = 98, col_w_w = display.width() - 98 - 1;
+      const int col_v_x = 32, col_v_w = 32;
+      const int col_a_x = 64, col_a_w = 32;
+      const int col_w_x = 96, col_w_w = display.width() - 96;
 
       // Линия между шапкой ноды и таблицей.
       display.setColor(UIColor::primary_txt);
