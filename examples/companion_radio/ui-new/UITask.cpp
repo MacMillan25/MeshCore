@@ -102,7 +102,7 @@ static const uint32_t MESSAGE_PREVIEW_MILLIS = 10000UL;
   // board: the 30S pulls about half of what the 33S does, the RA62 far less.
   // Порядок обязан совпадать с darktec::PowerModule и таблицами в
   // variants/darktec/DarktecPowerTables.h — модель берёт ток по этому индексу.
-  static const char* const RADIO_MODULE_LABEL[4] = { "33S", "30S", "RA62", "E22P" };
+  static const char* const RADIO_MODULE_LABEL[4] = { "E22-33S", "E22-30S", "RA62", "E22P" };
   static const int RADIO_MODULE_COUNT = 4;
 #else
   #define SETTINGS_BATT_ROWS   0
