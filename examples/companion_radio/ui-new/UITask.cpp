@@ -581,7 +581,7 @@ public:
     switch (page) {
 #ifdef UI_DARKTEC_SETTINGS
       case SettingsPage::ROOT:    return 6;   // + [ Darktec ]
-      case SettingsPage::DARKTEC_PAGE: return 5;   // 4 параметра + "Back" внизу
+      case SettingsPage::DARKTEC_PAGE: return 6;   // 5 параметров + "Back" внизу
 #else
       case SettingsPage::ROOT:    return 5;
 #endif
@@ -847,6 +847,13 @@ public:
         static const char* nf_names[DarktecPrefsFormat::kNoiseCount] = { "100ms", "250ms", "500ms", "1000ms" };
         snprintf(raw, sizeof(raw), "%s", nf_names[s.noise_idx < DarktecPrefsFormat::kNoiseCount ? s.noise_idx : 2]);
       } else if (i == 3) {
+        // Яркость: Dim / Normal / Bright — словами, не цифрами.
+        static const char* bri_names[DarktecPrefsFormat::kBrightnessCount] =
+            { "Dim", "Normal", "Bright" };
+        snprintf(raw, sizeof(raw), "%s",
+                 bri_names[s.brightness < DarktecPrefsFormat::kBrightnessCount
+                               ? s.brightness : DarktecPrefsFormat::BRI_BRIGHT]);
+      } else if (i == 4) {
         // Порядок обязан совпадать с DarktecPrefsFormat::ModuleCode.
         static const char* mod_names[4] = { "E22-33S", "E22-30S", "RA62", "E22P" };
         snprintf(raw, sizeof(raw), "%s", mod_names[s.module < 4 ? s.module : 0]);
@@ -1048,9 +1055,17 @@ public:
         s.noise_idx = fwd ? (s.noise_idx + 1) % n
                           : (s.noise_idx + n - 1) % n;
       } else if (i == 3) {
+        // Яркость: Dim (0) → Normal (128) → Bright (255). Применяется сразу:
+        // это одна I2C-команда контраста, перезагрузка не нужна.
+        const uint8_t n = DarktecPrefsFormat::kBrightnessCount;
+        s.brightness = (uint8_t)(fwd ? (s.brightness + 1) % n
+                                     : (s.brightness + n - 1) % n);
+        DisplayDriver* d = _task->getDisplay();
+        if (d) d->setContrast(DarktecPrefsFormat::brightnessContrast(s.brightness));
+      } else if (i == 4) {
         s.module = fwd ? (s.module + 1) % 4 : (s.module + 3) % 4;
         board.setRadioModule(s.module);   // RF-тракт и ETA — сразу
-      } else if (i == 4) {
+      } else if (i == 5) {
         // Back — возврат в корень настроек (тот же переход, что у общей
         // строки i==0 на других подстраницах).
         _settings_page = SettingsPage::ROOT;
@@ -2736,6 +2751,10 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
     }
     uiBegin(*_display, _node_prefs);
     _display->turnOn();
+    // Яркость из /darktec.prefs: у OLED это аппаратный контраст панели,
+    // у eInk/TFT метод пустой.
+    _display->setContrast(
+        DarktecPrefsFormat::brightnessContrast(DarktecPrefs::get().brightness));
     board.setDisplayOn(true);
 
     _display->startFrame();

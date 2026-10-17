@@ -14,6 +14,14 @@ TEST(DarktecPrefsFormatTest, BuildFlagDefaultsSanitized) {
   EXPECT_EQ(d.auto_off_idx, 0);
   EXPECT_EQ(d.noise_idx, 2);
   EXPECT_EQ(d.capacity_mode, CAP_USER);
+  EXPECT_EQ(d.brightness, BRI_BRIGHT);
+}
+
+TEST(DarktecPrefsFormatTest, BrightnessContrastValues) {
+  EXPECT_EQ(brightnessContrast(BRI_DIM), 0);
+  EXPECT_EQ(brightnessContrast(BRI_NORMAL), 128);
+  EXPECT_EQ(brightnessContrast(BRI_BRIGHT), 255);
+  EXPECT_EQ(brightnessContrast(99), 255);   // мусор — максимум
 }
 
 TEST(DarktecPrefsFormatTest, SerializeParseRoundTrip) {
@@ -23,6 +31,7 @@ TEST(DarktecPrefsFormatTest, SerializeParseRoundTrip) {
   in.auto_off_idx = 4;
   in.noise_idx = 0;
   in.capacity_mode = CAP_4000;
+  in.brightness = BRI_DIM;
 
   uint8_t buf[32];
   const size_t n = serialize(in, buf, sizeof(buf));
@@ -40,6 +49,7 @@ TEST(DarktecPrefsFormatTest, SerializeParseRoundTrip) {
   EXPECT_EQ(out.auto_off_idx, 4);
   EXPECT_EQ(out.noise_idx, 0);
   EXPECT_EQ(out.capacity_mode, CAP_4000);
+  EXPECT_EQ(out.brightness, BRI_DIM);
 }
 
 TEST(DarktecPrefsFormatTest, RejectsCorruption) {
@@ -73,12 +83,14 @@ TEST(DarktecPrefsFormatTest, SanitizeClampsRanges) {
   s.auto_off_idx = 9;       // вне 0..4 → 0
   s.noise_idx = 9;          // вне 0..3 → 500 мс
   s.capacity_mode = 9;      // вне 0..2 → UserPref
+  s.brightness = 9;         // вне 0..2 → Bright
   sanitize(s);
   EXPECT_EQ(s.capacity_mah, 3000);
   EXPECT_EQ(s.module, MOD_E22_900M33S);
   EXPECT_EQ(s.auto_off_idx, 0);
   EXPECT_EQ(s.noise_idx, 2);
   EXPECT_EQ(s.capacity_mode, CAP_USER);
+  EXPECT_EQ(s.brightness, BRI_BRIGHT);
 }
 
 TEST(DarktecPrefsFormatTest, CapacityBoundaryValuesKept) {
@@ -156,6 +168,24 @@ TEST(DarktecPrefsFormatTest, ReadsVersion2AsUserCapacity) {
   ASSERT_TRUE(parse(buf, kWireSize, out));
   EXPECT_EQ(out.capacity_mah, 4000);
   EXPECT_EQ(out.capacity_mode, CAP_USER);
+}
+
+// Версия 3 знала режим ёмкости, но не яркость: после чтения яркость максимальная.
+TEST(DarktecPrefsFormatTest, ReadsVersion3WithDefaultBrightness) {
+  Settings in{};
+  in.brightness = BRI_DIM;
+  uint8_t buf[32];
+  ASSERT_EQ(serialize(in, buf, sizeof(buf)), kWireSize);
+  buf[4] = 3;    // подменяем версию на старую
+  buf[11] = 0;   // в v3 это был резерв
+  const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
+  buf[18] = (uint8_t)(crc & 0xFF);
+  buf[19] = (uint8_t)(crc >> 8);
+
+  Settings out{};
+  ASSERT_TRUE(parse(buf, kWireSize, out));
+  EXPECT_EQ(out.capacity_mode, CAP_USER);
+  EXPECT_EQ(out.brightness, BRI_BRIGHT);
 }
 
 int main(int argc, char** argv) {

@@ -28,6 +28,9 @@ public:
   virtual void setRotation(uint8_t r) {}
   virtual void forceFullRefresh() {}       // force full eInk refresh on next frame
   virtual void fullRefreshAndHibernate() {} // full refresh + hibernate for clean shutdown
+  // Аппаратный контраст панели (0..255). Есть только у OLED; у eInk и TFT
+  // это пустышка, чтобы UI мог звать метод не задумываясь.
+  virtual void setContrast(uint8_t contrast) { (void)contrast; }
   // Line pitch in pixels for the given text size: cell height + inter-line gap.
   virtual int getLineH(int sz) const { return 8 * sz + 3; }
   virtual bool isEink() const { return false; }

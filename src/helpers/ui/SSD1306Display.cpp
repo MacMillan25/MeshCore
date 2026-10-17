@@ -20,6 +20,19 @@ ColorVal UIColor::popup_bkg = SSD1306_BLACK;
 ColorVal UIColor::popup_txt = SSD1306_WHITE;
 ColorVal UIColor::corp_blue = SSD1306_WHITE;
 
+void SSD1306Display::applyContrast() {
+  // Контраст панели: команда 0x81 и значение 0..255. Adafruit в begin()
+  // ставит свой (0xCF для 128x64), поэтому после инициализации его надо
+  // вернуть на пользовательский.
+  display.ssd1306_command(SSD1306_SETCONTRAST);
+  display.ssd1306_command(_contrast);
+}
+
+void SSD1306Display::setContrast(uint8_t contrast) {
+  _contrast = contrast;
+  applyContrast();
+}
+
 bool SSD1306Display::begin() {
   if (!_isOn) {
     if (_peripher_power) _peripher_power->claim();
@@ -28,7 +41,9 @@ bool SSD1306Display::begin() {
   #ifdef DISPLAY_ROTATION
   display.setRotation(DISPLAY_ROTATION);
   #endif
-  return display.begin(SSD1306_SWITCHCAPVCC, DISPLAY_ADDRESS, true, false) && i2c_probe(Wire, DISPLAY_ADDRESS);
+  bool ok = display.begin(SSD1306_SWITCHCAPVCC, DISPLAY_ADDRESS, true, false) && i2c_probe(Wire, DISPLAY_ADDRESS);
+  if (ok) applyContrast();
+  return ok;
 }
 
 void SSD1306Display::turnOn() {

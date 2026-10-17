@@ -3,8 +3,9 @@
 // Чистый (без Arduino) — подключается и в native-тестах.
 //
 // Что здесь живёт: то, что относится к железу DarkTec и не имеет смысла
-// для других плат — модель аккумулятора (ёмкость), впаянный радиомодуль и
-// две настройки экранов. Остальное (язык, часы, сообщения) — в NodePrefs ядра.
+// для других плат — модель аккумулятора (ёмкость), впаянный радиомодуль,
+// яркость экрана и две настройки экранов. Остальное (язык, часы,
+// сообщения) — в NodePrefs ядра.
 //
 // Формат бинарный намеренно: файл отдельный от /prefs.json, чтобы правка
 // настроек DarkTec не переписывала ядровые.
@@ -33,6 +34,7 @@ struct Settings {
   uint8_t auto_off_idx;   // 0=15s, 1=30s, 2=1m, 3=5m, 4=1h
   uint8_t noise_idx;      // 0=100ms, 1=250ms, 2=500ms, 3=1000ms
   uint8_t capacity_mode;  // CapacityMode: 0=UserPref, 1=3000, 2=4000
+  uint8_t brightness;     // BrightnessLevel: 0=Dim, 1=Normal, 2=Bright
 };
 
 // Откуда брать ёмкость. В меню листаются три пункта; UserPref — значение,
@@ -44,6 +46,20 @@ enum CapacityMode : uint8_t {
 };
 constexpr uint8_t kCapacityModeCount = 3;
 
+// Яркость экрана: три уровня, в меню называются словами, а не цифрами.
+// Значение — это аппаратный контраст SSD1306 (команда 0x81, 0..255).
+enum BrightnessLevel : uint8_t {
+  BRI_DIM = 0,      // 0   — экран еле светится
+  BRI_NORMAL = 1,   // 128
+  BRI_BRIGHT = 2,   // 255
+};
+constexpr uint8_t kBrightnessCount = 3;
+
+inline uint8_t brightnessContrast(uint8_t level) {
+  static const uint8_t kValues[kBrightnessCount] = { 0, 128, 255 };
+  return (level < kBrightnessCount) ? kValues[level] : 255;
+}
+
 constexpr uint16_t kCapacityMin = 1000;
 constexpr uint16_t kCapacityMax = 10000;
 constexpr uint16_t kCapacityDefault = 3000;
@@ -51,7 +67,7 @@ constexpr uint16_t kCapacityDefault = 3000;
 constexpr uint8_t kAutoOffCount = 5;
 constexpr uint8_t kNoiseCount = 4;
 
-constexpr uint8_t kWireVersion = 3;
+constexpr uint8_t kWireVersion = 4;
 constexpr uint8_t kWireSize = 20;  // magic(4) + ver(1) + payload(13) + crc(2)
 constexpr uint8_t kPayloadSize = 13;
 
@@ -77,6 +93,7 @@ inline Settings buildFlagDefaults() {
   s.auto_off_idx = 0;
   s.noise_idx = 2;  // 500 мс — как было в 1.17.1
   s.capacity_mode = CAP_USER;
+  s.brightness = BRI_BRIGHT;
   sanitize(s);
   return s;
 }
@@ -89,6 +106,7 @@ inline void sanitize(Settings& s) {
   if (s.auto_off_idx >= kAutoOffCount) s.auto_off_idx = 0;
   if (s.noise_idx >= kNoiseCount) s.noise_idx = 2;
   if (s.capacity_mode >= kCapacityModeCount) s.capacity_mode = CAP_USER;
+  if (s.brightness >= kBrightnessCount) s.brightness = BRI_BRIGHT;
 }
 
 // CRC16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
@@ -103,8 +121,8 @@ inline uint16_t crc16(const uint8_t* data, uint32_t len) {
   return crc;
 }
 
-// "DRTC" + version + payload(capacity_le16, module, auto_off, noise, 8×0x00)
-// + crc16(version+payload).
+// "DRTC" + version + payload(capacity_le16, module, auto_off, noise,
+// capacity_mode, brightness, 6×0x00) + crc16(version+payload).
 inline size_t serialize(const Settings& s, uint8_t* buf, size_t len) {
   if (len < kWireSize) return 0;
   Settings t = s;
@@ -117,7 +135,8 @@ inline size_t serialize(const Settings& s, uint8_t* buf, size_t len) {
   buf[8] = t.auto_off_idx;
   buf[9] = t.noise_idx;
   buf[10] = t.capacity_mode;
-  for (int i = 0; i < 7; i++) buf[11 + i] = 0x00;
+  buf[11] = t.brightness;
+  for (int i = 0; i < 6; i++) buf[12 + i] = 0x00;
   const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
   buf[18] = (uint8_t)(crc & 0xFF);
   buf[19] = (uint8_t)(crc >> 8);
@@ -139,6 +158,7 @@ inline bool parseV1(const uint8_t* buf, size_t len, Settings& out) {
   s.auto_off_idx = 0;
   s.noise_idx = 2;
   s.capacity_mode = CAP_USER;
+  s.brightness = BRI_BRIGHT;
   sanitize(s);
   out = s;
   return true;
@@ -156,11 +176,13 @@ inline bool parseV2(const uint8_t* buf, size_t len, Settings& out) {
   s.auto_off_idx = buf[8];
   s.noise_idx = buf[9];
   s.capacity_mode = CAP_USER;
+  s.brightness = BRI_BRIGHT;
   sanitize(s);
   out = s;
   return true;
 }
 
+// v3: появился режим ёмкости, яркости ещё не было — ставим максимальную.
 inline bool parseV3(const uint8_t* buf, size_t len, Settings& out) {
   if (len < kWireSize) return false;
   const uint16_t crc_stored = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
@@ -171,6 +193,23 @@ inline bool parseV3(const uint8_t* buf, size_t len, Settings& out) {
   s.auto_off_idx = buf[8];
   s.noise_idx = buf[9];
   s.capacity_mode = buf[10];
+  s.brightness = BRI_BRIGHT;
+  sanitize(s);
+  out = s;
+  return true;
+}
+
+inline bool parseV4(const uint8_t* buf, size_t len, Settings& out) {
+  if (len < kWireSize) return false;
+  const uint16_t crc_stored = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
+  if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
+  Settings s{};
+  s.capacity_mah = (uint16_t)(buf[5] | ((uint16_t)buf[6] << 8));
+  s.module = buf[7];
+  s.auto_off_idx = buf[8];
+  s.noise_idx = buf[9];
+  s.capacity_mode = buf[10];
+  s.brightness = buf[11];
   sanitize(s);
   out = s;
   return true;
@@ -182,7 +221,8 @@ inline bool parse(const uint8_t* buf, size_t len, Settings& out) {
   switch (buf[4]) {
     case 1: return parseV1(buf, len, out);
     case 2: return parseV2(buf, len, out);
-    case kWireVersion: return parseV3(buf, len, out);
+    case 3: return parseV3(buf, len, out);
+    case kWireVersion: return parseV4(buf, len, out);
     default: return false;
   }
 }

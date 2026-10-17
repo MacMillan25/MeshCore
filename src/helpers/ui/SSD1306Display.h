@@ -19,9 +19,11 @@ class SSD1306Display : public DisplayDriver {
   Adafruit_SSD1306 display;
   bool _isOn;
   uint8_t _color;
+  uint8_t _contrast = 255;   // аппаратный контраст, переживает turnOn/begin
   RefCountedDigitalPin* _peripher_power;
 
   bool i2c_probe(TwoWire& wire, uint8_t addr);
+  void applyContrast();
 public:
   SSD1306Display(RefCountedDigitalPin* peripher_power=NULL) : DisplayDriver(128, 64), 
       display(128, 64, &Wire, PIN_OLED_RESET),
@@ -32,6 +34,7 @@ public:
   bool begin();
 
   bool isOn() override { return _isOn; }
+  void setContrast(uint8_t contrast) override;
   void turnOn() override;
   void turnOff() override;
   void clear() override;
