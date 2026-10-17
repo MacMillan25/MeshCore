@@ -12,9 +12,9 @@
 
 #ifndef FIRMWARE_VERSION
   #ifdef GIT_COMMIT
-    #define FIRMWARE_VERSION "v1.18.0-" GIT_COMMIT
+    #define FIRMWARE_VERSION "v1.18.0d1-" GIT_COMMIT
   #else
-    #define FIRMWARE_VERSION "v1.18.0"
+    #define FIRMWARE_VERSION "v1.18.0d1"
   #endif
 #endif
 
