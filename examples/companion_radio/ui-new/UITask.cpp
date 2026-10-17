@@ -1498,15 +1498,19 @@ public:
         display.print(rows[i].label);
 
         if (rows[i].found) {
-          snprintf(buf, sizeof(buf), "%.2f", rows[i].v);
+          // Выше 9.99 В (зарядник на полной банке даёт 12.6 В) четыре знака
+          // уже не влезают в столбец — переходим на один знак после запятой.
+          snprintf(buf, sizeof(buf), (rows[i].v > 9.99f) ? "%.1f" : "%.2f",
+                   rows[i].v);
           display.setCursor(col_v_x + col_v_w - display.getTextWidth(buf) - 2, y);
           display.print(buf);
 
-          snprintf(buf, sizeof(buf), "%.2f", rows[i].a);
+          snprintf(buf, sizeof(buf), (rows[i].a > 9.99f) ? "%.1f" : "%.2f",
+                   rows[i].a);
           display.setCursor(col_a_x + col_a_w - display.getTextWidth(buf) - 2, y);
           display.print(buf);
 
-          // Past 9.99 W a second decimal would not fit the 27px slot, so the
+          // Past 9.99 W a second decimal would not fit the 32px slot, so the
           // wattage steps down to one decimal and keeps its column.
           float w = rows[i].v * rows[i].a;
           snprintf(buf, sizeof(buf), (w > 9.99f) ? "%.1f" : "%.2f", w);
