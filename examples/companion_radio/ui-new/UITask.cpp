@@ -1439,8 +1439,12 @@ public:
       // чёрные буквы), причём линии столбцов продолжены в шапку, поэтому
       // каждая буква сидит в своей ячейке. Значения прижаты к правому краю
       // столбца, чтобы числа не слипались.
+      //
+      // Всё поднято на 1 px от content_y: на живом OLED зазор в три пикселя
+      // между строкой CHARGED и нижней линией рамки визуально исчезал.
+      // Нижняя линия при этом остаётся на последней строке экрана.
       const int table_x = 0;
-      const int table_y = content_y;
+      const int table_y = content_y - 1;
       const int table_w = display.width();
       const int table_h = display.height() - table_y;
       const int head_h = line_h;
