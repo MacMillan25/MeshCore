@@ -12,7 +12,25 @@
 #define P_LORA_SCLK  12 //P1.11 43
 #define P_LORA_MOSI  14 //P1.15 47
 #define SX126X_POWER_EN 21 //P0.13 13
+
+// Тип радиомодуля (spec 0001 FR-2, D-6): 0 HT-RA62, 1 E22-900M30S (дефолт),
+// 2 E22P-868M30S, 3 E22-900M33S. У E22P пин 6 модуля — это EN (общий
+// включатель RF-тракта, активный высокий): RadioLib вёл его как RXEN и на
+// передаче опускал в 0, гася тракт целиком. При модуле 2 пин выводится
+// из-под библиотеки (SX126X_RXEN не задаётся) и держится высоким вручную
+// в DarktecBoard::begin(). Остальные модули — текущая разводка.
+#ifndef DARKTEC_RADIO_MODULE
+#define DARKTEC_RADIO_MODULE 1
+#endif
+#if DARKTEC_RADIO_MODULE < 0 || DARKTEC_RADIO_MODULE > 3
+#error "DARKTEC_RADIO_MODULE должен быть 0 (HT-RA62), 1 (E22-900M30S), 2 (E22P-868M30S) или 3 (E22-900M33S)"
+#endif
+#if DARKTEC_RADIO_MODULE == 2
+// EN E22P: P0.17 (Arduino 2) — вручную из begin(), RadioLib не трогает.
+#define DARKTEC_RADIO_EN_PIN 2
+#else
 #define SX126X_RXEN 2 //P0.17
+#endif
 #define SX126X_TXEN RADIOLIB_NC
 #define SX126X_DIO2_AS_RF_SWITCH  true
 #define SX126X_DIO3_TCXO_VOLTAGE (1.8f)
@@ -36,12 +54,8 @@
 #ifndef DARKTEC_INA_CHARGE_CH
 #define DARKTEC_INA_CHARGE_CH 1
 #endif
-#ifndef DARKTEC_CHARGE_ON_MA
-#define DARKTEC_CHARGE_ON_MA  120.0f
-#endif
-#ifndef DARKTEC_CHARGE_OFF_MA
-#define DARKTEC_CHARGE_OFF_MA 100.0f
-#endif
+// Пороги детекции заряда заменены автоматом DarktecSocModel (FR-34).
+
 
 class DarktecBoard : public NRF52BoardDCDC {
 protected:
@@ -81,7 +95,8 @@ public:
 
   #define BATTERY_SAMPLES 8
 
-  uint16_t getBattMilliVolts() override {
+  // Сырое чтение АЦП без побочных эффектов (защита юга, SOC-модель).
+  uint16_t readBattMvRaw() {
     analogReadResolution(12);
 
     uint32_t raw = 0;
@@ -90,6 +105,10 @@ public:
     }
     raw = raw / BATTERY_SAMPLES;
     return (uint16_t)(adc_mult * raw);
+  }
+
+  uint16_t getBattMilliVolts() override {
+    return readBattMvRaw();
   }
 
   bool setAdcMultiplier(float multiplier) override {

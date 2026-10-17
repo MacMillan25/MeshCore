@@ -95,6 +95,24 @@
 #error "Полное напряжение пакета превышает лимит входа батареи Darktec 5 В"
 #endif
 
+// ---- Ёмкость и зарядный ток (spec 0001: FR-1, FR-31) ----
+// Ёмкость ЯЧЕЙКИ: дефолт файла настроек /darktec.prefs при первом старте.
+#ifndef BATTERY_CAPACITY_MAH
+#define BATTERY_CAPACITY_MAH 4000
+#endif
+#if BATTERY_CAPACITY_MAH < 500 || BATTERY_CAPACITY_MAH > 30000
+#error "BATTERY_CAPACITY_MAH должен быть в диапазоне 500..30000 mAh (большие LTO/LiFePO4)"
+#endif
+
+// Номинал зарядного тока платы: TPS54302 + резисторный делитель (FR-31).
+// Прошивка ток не управляет; значение — для ETA (фаза 2) и детекции (FR-34).
+#ifndef DARKTEC_CHARGE_CURRENT_MA
+#define DARKTEC_CHARGE_CURRENT_MA 2000
+#endif
+#if DARKTEC_CHARGE_CURRENT_MA < 100 || DARKTEC_CHARGE_CURRENT_MA > 3000
+#error "DARKTEC_CHARGE_CURRENT_MA должен быть в диапазоне 100..3000 mA"
+#endif
+
 #ifndef BATT_MIN_MILLIVOLTS
 #define BATT_MIN_MILLIVOLTS  BATT_PACK_EMPTY_MV
 #endif

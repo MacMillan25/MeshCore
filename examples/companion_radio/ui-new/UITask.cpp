@@ -8,6 +8,15 @@
 #include "../UILang.h"
 #include "target.h"
 #include <time.h>
+// Страница настроек Darktec (spec 0001, FR-8..13): значения живут в
+// /darktec.prefs (variants/darktec), поэтому правка доступна только сборкам
+// варианта Darktec — заголовок есть в include-пути лишь у него.
+#if defined(DARKTEC) && defined(__has_include)
+  #if __has_include("DarktecPrefs.h")
+    #include "DarktecPrefs.h"
+    #define UI_DARKTEC_SETTINGS 1
+  #endif
+#endif
 #if defined(WIFI_SSID) || defined(WITH_WIFI_SWITCHING)
   #include <WiFi.h>
 #endif
@@ -216,6 +225,13 @@ class HomeScreen : public UIScreen {
   int           _settings_scroll = 0;   // first visible item index
   int           _settings_visible = 4;  // updated in render(), used in handleInput()
   unsigned long _pin_show_until = 0;
+#ifdef UI_DARKTEC_SETTINGS
+  // Временная заметка на строке страницы Darktec ("after reboot",
+  // "2S: LTO only") — живёт 4 с, затем строка возвращается к подписи.
+  unsigned long _darktec_note_until = 0;
+  int           _darktec_note_item = 0;
+  char          _darktec_note[24] = "";
+#endif
   int           _pm_clock_mode  = 1;   // 0=all msgs switch screen, 1=PM inline only
 
   // Cal ADC sub-mode (Settings → Cal ADC): confirm screen, one action at a time.
@@ -229,8 +245,19 @@ class HomeScreen : public UIScreen {
     COMMS,
     SYSTEM,
     CODECS
+#ifdef UI_DARKTEC_SETTINGS
+    , DARKTEC_PAGE
+#endif
   };
   SettingsPage _settings_page = SettingsPage::ROOT;
+
+#ifdef UI_DARKTEC_SETTINGS
+  void darktecNote(int item, const char* text) {
+    _darktec_note_item = item;
+    snprintf(_darktec_note, sizeof(_darktec_note), "%s", text ? text : "");
+    _darktec_note_until = millis() + 4000;
+  }
+#endif
 
 
 #ifdef WITH_WIFI_SWITCHING
@@ -399,7 +426,12 @@ public:
 
   int settingsPageItemCount(SettingsPage page) const {
     switch (page) {
+#ifdef UI_DARKTEC_SETTINGS
+      case SettingsPage::ROOT:    return 6;   // + [ Darktec ]
+      case SettingsPage::DARKTEC_PAGE: return 6;   // Назад + 5 параметров
+#else
       case SettingsPage::ROOT:    return 5;
+#endif
       case SettingsPage::CHAT:    return 6;
       case SettingsPage::DISP:    return 4 + extraCount(UI_FOLDER_DISPLAY);
       case SettingsPage::COMMS:   return 5 + extraCount(UI_FOLDER_CONNECTION);
@@ -459,7 +491,12 @@ public:
       if (i == 1) return _TR("[ Display ]", "[ Экран ]");
       if (i == 2) return _TR("[ Connection ]", "[ Связь ]");
       if (i == 3) return _TR("[ System ]", "[ Система ]");
+#ifdef UI_DARKTEC_SETTINGS
+      if (i == 4) return "[ Darktec ]";
+      if (i == 5) return _TR("[ Exit ]", "[ Выход ]");
+#else
       if (i == 4) return _TR("[ Exit ]", "[ Выход ]");
+#endif
     } else if (i == 0) {
       return _TR("< Back", "< Назад");
     }
@@ -497,6 +534,21 @@ public:
       if (i == 3) return "AEIC";
       if (i == 4) return "MCOimg";
     }
+#ifdef UI_DARKTEC_SETTINGS
+    if (page == SettingsPage::DARKTEC_PAGE) {
+      // Свежая заметка заменяет подпись строки (FR-9..11, D-8: "after
+      // reboot"; FR-10: предупреждение про 2S). Текст — английский, как
+      // весь остальной UI прошивки.
+      if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
+        return _darktec_note;
+      }
+      if (i == 1) return "Capacity, mAh";
+      if (i == 2) return "Batt type";
+      if (i == 3) return "Cells";
+      if (i == 4) return "Radio mod";
+      if (i == 5) return "Charge, mA";
+    }
+#endif
     return "";
   }
 
@@ -617,6 +669,26 @@ public:
       return true;
     }
 
+#ifdef UI_DARKTEC_SETTINGS
+    if (page == SettingsPage::DARKTEC_PAGE) {
+      const DarktecPrefs::Settings& s = DarktecPrefs::get();
+      if (i == 1) {
+        snprintf(val, val_len, "%u", (unsigned)s.capacity_mah);
+      } else if (i == 2) {
+        static const char* chem_names[3] = { "Li-ion", "LiFePO4", "LTO" };
+        snprintf(val, val_len, "%s", chem_names[s.chem < 3 ? s.chem : 0]);
+      } else if (i == 3) {
+        snprintf(val, val_len, "%uS", (unsigned)s.cells);
+      } else if (i == 4) {
+        static const char* mod_names[4] = { "HT-RA62", "E22-30S", "E22P-868", "E22-33S" };
+        snprintf(val, val_len, "%s", mod_names[s.module < 4 ? s.module : 1]);
+      } else if (i == 5) {
+        snprintf(val, val_len, "%u", (unsigned)s.charge_ma);
+      }
+      return true;
+    }
+#endif
+
     return false;
   }
 
@@ -627,7 +699,12 @@ public:
       else if (i == 1) { _settings_page = SettingsPage::DISP; }
       else if (i == 2) { _settings_page = SettingsPage::COMMS; }
       else if (i == 3) { _settings_page = SettingsPage::SYSTEM; }
+#ifdef UI_DARKTEC_SETTINGS
+      else if (i == 4) { _settings_page = SettingsPage::DARKTEC_PAGE; }
+      else if (i == 5) { _in_settings = false; return; }
+#else
       else if (i == 4) { _in_settings = false; return; }
+#endif
       _settings_sel = 1;
       _settings_scroll = 0;
       while (_settings_sel < settingsPageItemCount(_settings_page) && isSettingHidden(_settings_page, _settings_sel)) {
@@ -648,6 +725,9 @@ public:
         else if (prev == SettingsPage::DISP) _settings_sel = 1;
         else if (prev == SettingsPage::COMMS) _settings_sel = 2;
         else if (prev == SettingsPage::SYSTEM) _settings_sel = 3;
+#ifdef UI_DARKTEC_SETTINGS
+        else if (prev == SettingsPage::DARKTEC_PAGE) _settings_sel = 4;
+#endif
         _settings_scroll = 0;
       }
       return;
@@ -760,6 +840,52 @@ public:
       else if (i == 3) the_mesh.setAEICDetectEnabled(!the_mesh.isAEICDetectEnabled());
       else if (i == 4) the_mesh.setMCOimgDetectEnabled(!the_mesh.isMCOimgDetectEnabled());
     }
+
+#ifdef UI_DARKTEC_SETTINGS
+    // Darktec (spec 0001, FR-8..11): правка /darktec.prefs, шаг ±100,
+    // на краях диапазона — переход на противоположный край. Химия/ячейки/
+    // модуль применяются после перезагрузки (D-8) — заметка на строке.
+    if (page == SettingsPage::DARKTEC_PAGE) {
+      DarktecPrefs::Settings s = DarktecPrefs::get();
+      if (i == 1) {
+        int cap = (int)s.capacity_mah + (fwd ? 100 : -100);
+        if (cap > (int)DarktecPrefsFormat::kCapacityMax) cap = (int)DarktecPrefsFormat::kCapacityMin;
+        if (cap < (int)DarktecPrefsFormat::kCapacityMin) cap = (int)DarktecPrefsFormat::kCapacityMax;
+        s.capacity_mah = (uint16_t)cap;
+      } else if (i == 2) {
+        s.chem = (s.chem + (fwd ? 1 : 2)) % 3;
+        if (s.chem != DarktecPrefsFormat::CHEM_LTO && s.cells > 1) {
+          s.cells = 1;   // 2S доступна только для LTO — сброс с предупреждением (FR-10)
+          darktecNote(3, "cells: 1 (2S=LTO)");
+        } else {
+          darktecNote(2, "after reboot");
+        }
+      } else if (i == 3) {
+        if (s.cells == 2) {
+          s.cells = 1;
+          darktecNote(3, "after reboot");
+        } else if (s.chem == DarktecPrefsFormat::CHEM_LTO) {
+          s.cells = 2;
+          darktecNote(3, "after reboot");
+        } else {
+          darktecNote(3, "2S: LTO only");
+          return;
+        }
+      } else if (i == 4) {
+        s.module = (s.module + (fwd ? 1 : 3)) % 4;
+        darktecNote(4, "after reboot");
+      } else if (i == 5) {
+        int ma = (int)s.charge_ma + (fwd ? 100 : -100);
+        if (ma > (int)DarktecPrefsFormat::kChargeMax) ma = (int)DarktecPrefsFormat::kChargeMin;
+        if (ma < (int)DarktecPrefsFormat::kChargeMin) ma = (int)DarktecPrefsFormat::kChargeMax;
+        s.charge_ma = (uint16_t)ma;
+      } else {
+        return;
+      }
+      DarktecPrefs::save(s);
+      return;
+    }
+#endif
   }
 
 
@@ -1442,6 +1568,15 @@ public:
         return ms < 100 ? 100 : ms;  // refresh exactly when PIN expires
       }
     }
+#ifdef UI_DARKTEC_SETTINGS
+    if (_page == HomePage::SETTINGS && _in_settings && _darktec_note_until) {
+      unsigned long now = millis();
+      if (now < _darktec_note_until) {
+        int ms = (int)(_darktec_note_until - now);
+        return ms < 100 ? 100 : ms;  // redraw exactly when the note expires
+      }
+    }
+#endif
     return 5000;   // next render after 5000 ms
   }
 
@@ -1560,6 +1695,9 @@ public:
           else if (prev == SettingsPage::DISP) _settings_sel = 1;
           else if (prev == SettingsPage::COMMS) _settings_sel = 2;
           else if (prev == SettingsPage::SYSTEM) _settings_sel = 3;
+#ifdef UI_DARKTEC_SETTINGS
+          else if (prev == SettingsPage::DARKTEC_PAGE) _settings_sel = 4;
+#endif
           _settings_scroll = 0;
         } else {
           _in_settings = false;
