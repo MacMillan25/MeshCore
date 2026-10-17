@@ -653,16 +653,17 @@ public:
     }
 #ifdef UI_DARKTEC_SETTINGS
     else if (page == SettingsPage::DARKTEC_PAGE) {
-      // Своя строка выхода внизу списка (как в официалке): i==4 — "Back",
-      // пункты — i==0..3. Без стрелки: курсор ">" рядом с "<" сливается.
-      if (i == 4) return "Back";
+      // Своя строка выхода внизу списка (как в официалке): i==5 — "Back",
+      // пункты — i==0..4. Без стрелки: курсор ">" рядом с "<" сливается.
+      if (i == 5) return "Back";
       if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
         return _darktec_note;
       }
       if (i == 0) return "Capacity";
       if (i == 1) return "Screen on";
       if (i == 2) return "NF Speed";
-      if (i == 3) return "Radio mod";
+      if (i == 3) return "Brightness";
+      if (i == 4) return "Radio mod";
     }
 #endif
     else if (i == 0) {
@@ -847,12 +848,12 @@ public:
         static const char* nf_names[DarktecPrefsFormat::kNoiseCount] = { "100ms", "250ms", "500ms", "1000ms" };
         snprintf(raw, sizeof(raw), "%s", nf_names[s.noise_idx < DarktecPrefsFormat::kNoiseCount ? s.noise_idx : 2]);
       } else if (i == 3) {
-        // Яркость: Dim / Normal / Bright — словами, не цифрами.
+        // Яркость: Low / Mid / High — словами, не цифрами.
         static const char* bri_names[DarktecPrefsFormat::kBrightnessCount] =
-            { "Dim", "Normal", "Bright" };
+            { "Low", "Mid", "High" };
         snprintf(raw, sizeof(raw), "%s",
                  bri_names[s.brightness < DarktecPrefsFormat::kBrightnessCount
-                               ? s.brightness : DarktecPrefsFormat::BRI_BRIGHT]);
+                               ? s.brightness : DarktecPrefsFormat::BRI_HIGH]);
       } else if (i == 4) {
         // Порядок обязан совпадать с DarktecPrefsFormat::ModuleCode.
         static const char* mod_names[4] = { "E22-33S", "E22-30S", "RA62", "E22P" };

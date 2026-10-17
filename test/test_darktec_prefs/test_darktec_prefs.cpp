@@ -14,13 +14,13 @@ TEST(DarktecPrefsFormatTest, BuildFlagDefaultsSanitized) {
   EXPECT_EQ(d.auto_off_idx, 0);
   EXPECT_EQ(d.noise_idx, 2);
   EXPECT_EQ(d.capacity_mode, CAP_USER);
-  EXPECT_EQ(d.brightness, BRI_BRIGHT);
+  EXPECT_EQ(d.brightness, BRI_HIGH);
 }
 
 TEST(DarktecPrefsFormatTest, BrightnessContrastValues) {
-  EXPECT_EQ(brightnessContrast(BRI_DIM), 0);
-  EXPECT_EQ(brightnessContrast(BRI_NORMAL), 128);
-  EXPECT_EQ(brightnessContrast(BRI_BRIGHT), 255);
+  EXPECT_EQ(brightnessContrast(BRI_LOW), 1);
+  EXPECT_EQ(brightnessContrast(BRI_MID), 127);
+  EXPECT_EQ(brightnessContrast(BRI_HIGH), 255);
   EXPECT_EQ(brightnessContrast(99), 255);   // мусор — максимум
 }
 
@@ -31,7 +31,7 @@ TEST(DarktecPrefsFormatTest, SerializeParseRoundTrip) {
   in.auto_off_idx = 4;
   in.noise_idx = 0;
   in.capacity_mode = CAP_4000;
-  in.brightness = BRI_DIM;
+  in.brightness = BRI_LOW;
 
   uint8_t buf[32];
   const size_t n = serialize(in, buf, sizeof(buf));
@@ -49,7 +49,7 @@ TEST(DarktecPrefsFormatTest, SerializeParseRoundTrip) {
   EXPECT_EQ(out.auto_off_idx, 4);
   EXPECT_EQ(out.noise_idx, 0);
   EXPECT_EQ(out.capacity_mode, CAP_4000);
-  EXPECT_EQ(out.brightness, BRI_DIM);
+  EXPECT_EQ(out.brightness, BRI_LOW);
 }
 
 TEST(DarktecPrefsFormatTest, RejectsCorruption) {
@@ -90,7 +90,7 @@ TEST(DarktecPrefsFormatTest, SanitizeClampsRanges) {
   EXPECT_EQ(s.auto_off_idx, 0);
   EXPECT_EQ(s.noise_idx, 2);
   EXPECT_EQ(s.capacity_mode, CAP_USER);
-  EXPECT_EQ(s.brightness, BRI_BRIGHT);
+  EXPECT_EQ(s.brightness, BRI_HIGH);
 }
 
 TEST(DarktecPrefsFormatTest, CapacityBoundaryValuesKept) {
@@ -173,7 +173,7 @@ TEST(DarktecPrefsFormatTest, ReadsVersion2AsUserCapacity) {
 // Версия 3 знала режим ёмкости, но не яркость: после чтения яркость максимальная.
 TEST(DarktecPrefsFormatTest, ReadsVersion3WithDefaultBrightness) {
   Settings in{};
-  in.brightness = BRI_DIM;
+  in.brightness = BRI_LOW;
   uint8_t buf[32];
   ASSERT_EQ(serialize(in, buf, sizeof(buf)), kWireSize);
   buf[4] = 3;    // подменяем версию на старую
@@ -185,7 +185,7 @@ TEST(DarktecPrefsFormatTest, ReadsVersion3WithDefaultBrightness) {
   Settings out{};
   ASSERT_TRUE(parse(buf, kWireSize, out));
   EXPECT_EQ(out.capacity_mode, CAP_USER);
-  EXPECT_EQ(out.brightness, BRI_BRIGHT);
+  EXPECT_EQ(out.brightness, BRI_HIGH);
 }
 
 int main(int argc, char** argv) {

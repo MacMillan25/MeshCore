@@ -48,15 +48,16 @@ constexpr uint8_t kCapacityModeCount = 3;
 
 // Яркость экрана: три уровня, в меню называются словами, а не цифрами.
 // Значение — это аппаратный контраст SSD1306 (команда 0x81, 0..255).
+// 1, а не 0: при нулевом контрасте экран не читается вообще.
 enum BrightnessLevel : uint8_t {
-  BRI_DIM = 0,      // 0   — экран еле светится
-  BRI_NORMAL = 1,   // 128
-  BRI_BRIGHT = 2,   // 255
+  BRI_LOW = 0,      // 1
+  BRI_MID = 1,      // 127
+  BRI_HIGH = 2,     // 255
 };
 constexpr uint8_t kBrightnessCount = 3;
 
 inline uint8_t brightnessContrast(uint8_t level) {
-  static const uint8_t kValues[kBrightnessCount] = { 0, 128, 255 };
+  static const uint8_t kValues[kBrightnessCount] = { 1, 127, 255 };
   return (level < kBrightnessCount) ? kValues[level] : 255;
 }
 
@@ -93,7 +94,7 @@ inline Settings buildFlagDefaults() {
   s.auto_off_idx = 0;
   s.noise_idx = 2;  // 500 мс — как было в 1.17.1
   s.capacity_mode = CAP_USER;
-  s.brightness = BRI_BRIGHT;
+  s.brightness = BRI_HIGH;
   sanitize(s);
   return s;
 }
@@ -106,7 +107,7 @@ inline void sanitize(Settings& s) {
   if (s.auto_off_idx >= kAutoOffCount) s.auto_off_idx = 0;
   if (s.noise_idx >= kNoiseCount) s.noise_idx = 2;
   if (s.capacity_mode >= kCapacityModeCount) s.capacity_mode = CAP_USER;
-  if (s.brightness >= kBrightnessCount) s.brightness = BRI_BRIGHT;
+  if (s.brightness >= kBrightnessCount) s.brightness = BRI_HIGH;
 }
 
 // CRC16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
@@ -158,7 +159,7 @@ inline bool parseV1(const uint8_t* buf, size_t len, Settings& out) {
   s.auto_off_idx = 0;
   s.noise_idx = 2;
   s.capacity_mode = CAP_USER;
-  s.brightness = BRI_BRIGHT;
+  s.brightness = BRI_HIGH;
   sanitize(s);
   out = s;
   return true;
@@ -176,7 +177,7 @@ inline bool parseV2(const uint8_t* buf, size_t len, Settings& out) {
   s.auto_off_idx = buf[8];
   s.noise_idx = buf[9];
   s.capacity_mode = CAP_USER;
-  s.brightness = BRI_BRIGHT;
+  s.brightness = BRI_HIGH;
   sanitize(s);
   out = s;
   return true;
@@ -193,7 +194,7 @@ inline bool parseV3(const uint8_t* buf, size_t len, Settings& out) {
   s.auto_off_idx = buf[8];
   s.noise_idx = buf[9];
   s.capacity_mode = buf[10];
-  s.brightness = BRI_BRIGHT;
+  s.brightness = BRI_HIGH;
   sanitize(s);
   out = s;
   return true;
