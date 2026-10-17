@@ -230,6 +230,13 @@ public:
 
   uint32_t getEtaMinutes() const { return _pm.etaMinutes(); }
 
+  // Остаток до полного заряда (0, если заряда нет) — для страницы батареи.
+  uint32_t getChargeEtaMinutes() const { return _pm.etaChargeMinutes(); }
+
+  // Ток пакета как есть: под зарядом он положительный и показывает, сколько
+  // реально льётся в банку (в отличие от модельного getStateLoadMa).
+  float getBattCurrentMa() const { return _pm.getBattCurrentMa(); }
+
   // Модуль и мощность передатчика: то, чем модель различает железо.
   // Вызывается и из UI компаньона, и из CLI — чтобы у всех ролей было одно.
   void setPowerModel(uint8_t module, int8_t tx_dbm, float capacity_mah) {

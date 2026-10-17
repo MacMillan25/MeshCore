@@ -51,18 +51,34 @@ static const uint32_t ETA_MINUTES_CAP = 200000UL;
 // Ток пакета, ниже которого заряд не считаем: INA3221 шумит на десятки мА.
 static const float CHARGE_DETECT_MA = 20.0f;
 
+// Сглаживание показаний. Замеры идут раз в 250 мс, а АЦП шумит на пару
+// милливольт — в полке кривой это доли процента, но остаток и ETA от них
+// дёргаются. Экспоненциальное сглаживание убирает дрожь, не мешая реальному
+// изменению за минуты.
+static const float SOC_SMOOTH_ALPHA = 0.05f;   // τ ≈ 5 с при тике 250 мс
+static const float ETA_SMOOTH_ALPHA = 0.02f;   // τ ≈ 12 с
+
+// Ограничение прыжка ETA за один тик: не быстрее 1% (и не меньше 1 минуты),
+// чтобы смена скважности не перебрасывала прогноз на часы одним кадром.
+static const float ETA_MAX_STEP_FRACTION = 0.01f;
+
 class PowerModel {
 public:
   void setCapacityMah(float mah) {
     if (mah < 100.0f) return;
     _capacity_mah = mah;
+    _eta_valid = false;   // ёмкость поменялась — прогноз начинаем заново
   }
 
   void setModule(uint8_t module) {
     _module = (module < MODULE_COUNT) ? module : MODULE_E22_900M33S;
+    _eta_valid = false;   // другие токи модуля — другой прогноз
   }
 
-  void setTxPowerDbm(int8_t dbm) { _tx_dbm = dbm; }
+  void setTxPowerDbm(int8_t dbm) {
+    _tx_dbm = dbm;
+    _eta_valid = false;
+  }
 
   // Экран горит — другой ток покоя, разница 6-13 мА постоянных.
   void setDisplayOn(bool on) { _display_on = on; }
@@ -104,8 +120,21 @@ public:
     _charging = charging;
     _batt_current_ma = batt_current_ma;
     _ocv_mv = ocvFromTerminalPolar(batt_mv, batt_current_ma);
-    _soc = socFromVoltage(_ocv_mv);
-    _soc_valid = true;
+
+    // Процент по кривой — и сразу сглаженный: одиночный шумный замер не должен
+    // дёргать остаток в мАч и ETA.
+    const float soc_now = socFromVoltage(_ocv_mv);
+    if (!_soc_valid) {
+      _soc = soc_now;
+      _soc_valid = true;
+    } else {
+      _soc += (soc_now - _soc) * SOC_SMOOTH_ALPHA;
+    }
+
+    // ETA и ETA заряда пересчитываются здесь же, чтобы UI читал готовое
+    // значение и не считал цикл на каждой отрисовке.
+    smoothEta();
+    smoothChargeEta();
   }
 
   bool isCharging() const { return _charging; }
@@ -143,30 +172,25 @@ public:
 
   // --- ETA ------------------------------------------------------------------
 
+  // Остаток времени до пустой банки. Значение сглаженное: UI читает его
+  // несколько раз в секунду, а сырой прогноз зависит от скважности и шума.
   uint32_t etaMinutes() const {
-    if (!_soc_valid || _soc <= 0.0f || _capacity_mah <= 0.0f) return 0;
-
-    const float tx_fraction = txDutyFraction();
-    float minutes = 0.0f;
-    float soc = _soc;
-
-    while (soc > 0.5f) {
-      float step = (soc < (float)ETA_SOC_STEP) ? soc : (float)ETA_SOC_STEP;
-      float soc_mid = soc - step * 0.5f;
-      uint16_t mv = voltageForSoc(soc_mid, vFullMv());
-
-      float i_idle = idleCurrentAt(mv);
-      float i_tx = txCurrentAt(mv);
-      float i_avg = i_idle + (i_tx - i_idle) * tx_fraction;
-      if (i_avg < 1.0f) i_avg = 1.0f;
-
-      minutes += (_capacity_mah * step / 100.0f) / i_avg * 60.0f;
-      soc -= step;
-
-      if (minutes > (float)ETA_MINUTES_CAP) return ETA_MINUTES_CAP;
-    }
-    return (uint32_t)(minutes + 0.5f);
+    if (_eta_valid) return (uint32_t)(_eta_smooth + 0.5f);
+    return (uint32_t)(computeEtaMinutes(_soc) + 0.5f);
   }
+
+  // Остаток времени до полного заряда; 0, если заряда нет.
+  // На CC-фазе прогноз честный (ток постоянный), на CV ток падает, поэтому
+  // после 80% он намеренно растянут — иначе обещает «10 минут» и висит час.
+  uint32_t etaChargeMinutes() const {
+    if (_charge_eta_valid && _charging) {
+      return (uint32_t)(_charge_eta_smooth + 0.5f);
+    }
+    return 0;
+  }
+
+  // Наблюдаемая доля времени в эфире.
+  float txDutyFraction() const { return _tx_fraction; }
 
   // --- Наблюдаемая скважность передачи --------------------------------------
 
@@ -185,10 +209,89 @@ public:
     }
   }
 
-  float txDutyFraction() const { return _tx_fraction; }
-
 private:
   static const uint32_t TX_WINDOW_MS = 600000UL;   // 10 минут
+
+  // Прогноз до пустой банки от заданного SOC. Отдельный метод, чтобы
+  // сглаживание могло пересчитать его, не трогая отображаемый _soc.
+  float computeEtaMinutes(float soc_start) const {
+    if (!_soc_valid || soc_start <= 0.0f || _capacity_mah <= 0.0f) return 0.0f;
+
+    const float tx_fraction = _tx_fraction;
+    float minutes = 0.0f;
+    float soc = soc_start;
+
+    while (soc > 0.5f) {
+      float step = (soc < (float)ETA_SOC_STEP) ? soc : (float)ETA_SOC_STEP;
+      float soc_mid = soc - step * 0.5f;
+      uint16_t mv = voltageForSoc(soc_mid, vFullMv());
+
+      float i_idle = idleCurrentAt(mv);
+      float i_tx = txCurrentAt(mv);
+      float i_avg = i_idle + (i_tx - i_idle) * tx_fraction;
+      if (i_avg < 1.0f) i_avg = 1.0f;
+
+      minutes += (_capacity_mah * step / 100.0f) / i_avg * 60.0f;
+      soc -= step;
+
+      if (minutes > (float)ETA_MINUTES_CAP) return (float)ETA_MINUTES_CAP;
+    }
+    return minutes;
+  }
+
+  float computeChargeEtaMinutes() const {
+    if (!_soc_valid || !_charging) return 0.0f;
+    const float i_ma = signedChargeCurrentMa(_batt_current_ma);
+    if (i_ma < CHARGE_DETECT_MA) return 0.0f;
+    const float soc = _soc;
+    if (soc >= 99.5f) return 0.0f;
+
+    const float remain_mah = _capacity_mah * (100.0f - soc) / 100.0f;
+    float minutes = remain_mah / i_ma * 60.0f;
+
+    // CV-фаза: после 80% зарядник держит напряжение и ток спадает, поэтому
+    // линейный прогноз занижает время. Коэффициент растёт от 1 до 5.
+    if (soc > 80.0f) {
+      minutes *= 1.0f + 4.0f * (soc - 80.0f) / 20.0f;
+    }
+    return minutes;
+  }
+
+  // Сглаживание ETA: экспонента плюс ограничение прыжка за тик.
+  void smoothEta() {
+    const float raw = computeEtaMinutes(_soc);
+    if (!_eta_valid) {
+      _eta_smooth = raw;
+      _eta_valid = true;
+      return;
+    }
+    float step = (raw - _eta_smooth) * ETA_SMOOTH_ALPHA;
+    const float max_step = _eta_smooth * ETA_MAX_STEP_FRACTION + 1.0f;
+    if (step > max_step) step = max_step;
+    if (step < -max_step) step = -max_step;
+    _eta_smooth += step;
+    if (_eta_smooth < 0.0f) _eta_smooth = 0.0f;
+  }
+
+  void smoothChargeEta() {
+    if (!_charging) {
+      _charge_eta_smooth = 0.0f;
+      _charge_eta_valid = false;
+      return;
+    }
+    const float raw = computeChargeEtaMinutes();
+    if (!_charge_eta_valid) {
+      _charge_eta_smooth = raw;
+      _charge_eta_valid = true;
+      return;
+    }
+    float step = (raw - _charge_eta_smooth) * ETA_SMOOTH_ALPHA;
+    const float max_step = _charge_eta_smooth * ETA_MAX_STEP_FRACTION + 1.0f;
+    if (step > max_step) step = max_step;
+    if (step < -max_step) step = -max_step;
+    _charge_eta_smooth += step;
+    if (_charge_eta_smooth < 0.0f) _charge_eta_smooth = 0.0f;
+  }
 
   float    _capacity_mah = 3000.0f;
   float    _soc = 100.0f;
@@ -202,6 +305,11 @@ private:
   int8_t   _tx_dbm = 22;
   bool     _display_on = false;
   uint32_t _last_active_ms = 0;
+
+  float    _eta_smooth = 0.0f;
+  bool     _eta_valid = false;
+  float    _charge_eta_smooth = 0.0f;
+  bool     _charge_eta_valid = false;
 
   uint32_t _tx_ms_in_window = 0;
   uint32_t _window_ms = 0;

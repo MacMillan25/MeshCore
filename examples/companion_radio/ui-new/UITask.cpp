@@ -1434,35 +1434,48 @@ public:
       };
 
       char buf[26];
-      int y = content_y;
 
-      snprintf(buf, sizeof(buf), "%-4s %5s%5s%5s", "", "V", "A", "W");
-      display.setCursor(0, y);
+      // Таблица в рамке: заголовок столбцов, две строки рельсов и счётчик
+      // заряда. Рамка держит взгляд на числах и отделяет таблицу от шапки.
+      const int table_x = 0;
+      const int table_y = content_y;
+      const int table_w = display.width();
+      const int table_h = display.height() - table_y;
+      const int row_h = line_h;
+
+      display.setColor(UIColor::primary_txt);
+      display.drawRect(table_x, table_y, table_w, table_h);
+
+      snprintf(buf, sizeof(buf), "%-4s%5s%5s%5s", "", "V", "A", "W");
+      display.setCursor(table_x + 1, table_y + 1);
       display.print(buf);
-      y += line_h;
+      display.fillRect(table_x + 1, table_y + row_h, table_w - 2, 1);
 
+      int y = table_y + row_h + 1;
       for (int i = 0; i < 2; i++) {
         if (rows[i].found) {
+          // Past 9.99 W a second decimal would push the column off the right
+          // edge, so the wattage steps down to one decimal and keeps its slot.
           float w = rows[i].v * rows[i].a;
           if (w > 9.99f)
-            snprintf(buf, sizeof(buf), "%-4s %5.2f%5.2f%5.1f",
+            snprintf(buf, sizeof(buf), "%-4s%5.2f%5.2f%5.1f",
                      rows[i].label, rows[i].v, rows[i].a, w);
           else
-            snprintf(buf, sizeof(buf), "%-4s %5.2f%5.2f%5.2f",
+            snprintf(buf, sizeof(buf), "%-4s%5.2f%5.2f%5.2f",
                      rows[i].label, rows[i].v, rows[i].a, w);
         } else {
-          snprintf(buf, sizeof(buf), "%-4s %5s%5s%5s", rows[i].label, "--", "--", "--");
+          snprintf(buf, sizeof(buf), "%-4s%5s%5s%5s", rows[i].label, "--", "--", "--");
         }
-        display.setCursor(0, y);
+        display.setCursor(table_x + 1, y);
         display.print(buf);
-        y += line_h;
+        y += row_h;
       }
 
 #if defined(DARKTEC)
       // Залито в пакет за текущую сессию заряда (счётчик в DarktecBoard).
-      snprintf(buf, sizeof(buf), "BATT CHRG: %lu mAh",
+      snprintf(buf, sizeof(buf), "CHRG %lu mAh",
                (unsigned long)board.getChargeMah());
-      display.setCursor(0, y);
+      display.setCursor(table_x + 1, y);
       display.print(buf);
 #endif
 
@@ -1582,15 +1595,34 @@ public:
                capacity ? (unsigned)(remain * 100u / capacity) : 0u);
       display.setCursor(0, by); display.print(bbuf); by += line_h;
 
-      uint32_t eta_min = board.getEtaMinutes();
-      snprintf(bbuf, sizeof(bbuf), "ETA    %luh %lum",
-               (unsigned long)(eta_min / 60), (unsigned long)(eta_min % 60));
+      uint32_t eta_min = board.isPowerModelCharging()
+                             ? board.getChargeEtaMinutes()
+                             : board.getEtaMinutes();
+      if (board.isPowerModelCharging()) {
+        // Под зарядом ETA считается до полного, а не до пустого.
+        if (eta_min > 0) {
+          snprintf(bbuf, sizeof(bbuf), "ETA    CHG %luh %lum",
+                   (unsigned long)(eta_min / 60), (unsigned long)(eta_min % 60));
+        } else {
+          snprintf(bbuf, sizeof(bbuf), "ETA    CHG --");
+        }
+      } else {
+        snprintf(bbuf, sizeof(bbuf), "ETA    %luh %lum",
+                 (unsigned long)(eta_min / 60), (unsigned long)(eta_min % 60));
+      }
       display.setCursor(0, by); display.print(bbuf); by += line_h;
 
       // Iavg намеренно не выводим: на полной банке он почти не меняется и
-      // выглядит застывшим. Показываем ток текущего состояния.
-      snprintf(bbuf, sizeof(bbuf), "Inow   %umA",
-               (unsigned)(board.getStateLoadMa() + 0.5f));
+      // выглядит застывшим. Показываем ток текущего состояния, а под зарядом —
+      // сколько реально льётся в банку.
+      if (board.isPowerModelCharging()) {
+        float i_ma = board.getBattCurrentMa();
+        if (i_ma < 0.0f) i_ma = -i_ma;
+        snprintf(bbuf, sizeof(bbuf), "Inow   +%umA", (unsigned)(i_ma + 0.5f));
+      } else {
+        snprintf(bbuf, sizeof(bbuf), "Inow   %umA",
+                 (unsigned)(board.getStateLoadMa() + 0.5f));
+      }
       display.setCursor(0, by); display.print(bbuf);
 
       return UI_INA_REFRESH_MS;
