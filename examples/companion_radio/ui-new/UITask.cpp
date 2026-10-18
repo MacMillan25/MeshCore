@@ -333,27 +333,55 @@ class HomeScreen : public UIScreen {
   bool _shutdown_init;
   int _clock_pm_pending;   // PMs queued for inline display on CLOCK page
 #if UI_NOISE_PAGE == 1
-  int16_t       noise_hist[NOISE_SAMPLES] = {};
+  int16_t       noise_hist[NOISE_SAMPLES] = {};   // шумовой пол, dBm
+  int16_t       snr_hist[NOISE_SAMPLES] = {};     // SNR × 10, dB
+  bool          noise_show_snr = false;           // false = шум, true = SNR
   uint8_t       noise_head = 0;          // next write slot
   uint8_t       noise_count = 0;         // valid entries, grows to NOISE_SAMPLES
   unsigned long next_noise_sample = 0;
 
   // Oldest sample first: index 0 is the leftmost column on screen.
-  int noiseSampleAt(int i) const {
-    return noise_hist[(noise_head + NOISE_SAMPLES - noise_count + i) % NOISE_SAMPLES];
+  int noiseSampleAt(const int16_t* hist, int i) const {
+    return hist[(noise_head + NOISE_SAMPLES - noise_count + i) % NOISE_SAMPLES];
   }
 
   // Three-point moving average: the core already averages 64 RSSI reads, but
   // hands over a fresh result only every calibration interval.
-  int noiseSmoothedAt(int i) const {
+  int noiseSmoothedAt(const int16_t* hist, int i) const {
     int sum = 0, n = 0;
     for (int k = i - 1; k <= i + 1; k++) {
       if (k < 0 || k >= noise_count) continue;
-      sum += noiseSampleAt(k);
+      sum += noiseSampleAt(hist, k);
       n++;
     }
     return n ? (sum + n / 2) / n : 0;
   }
+
+  const int16_t* noiseSeries() const { return noise_show_snr ? snr_hist : noise_hist; }
+
+  // Метка внизу: выбранная — белый блок с чёрным текстом и срезанными
+  // углами, невыбранная — обычный серый. Как на экране шума у beeline.
+  void drawNoiseLabel(DisplayDriver& display, const char* text, int x, bool selected) {
+    const int w = display.getTextWidth(text) + 2;
+    const int y = display.height() - 10;
+    if (selected) {
+      display.setColor(UIColor::primary_txt);
+      display.fillRect(x, y, w, 10);
+      display.setColor(UIColor::window_bkg);
+      display.fillRect(x, y, 1, 1);
+      display.fillRect(x + w - 1, y, 1, 1);
+      display.fillRect(x, y + 9, 1, 1);
+      display.fillRect(x + w - 1, y + 9, 1, 1);
+      display.setCursor(x + 2, y + 1);
+      display.print(text);
+    } else {
+      display.setColor(UIColor::secondary_txt);
+      display.setCursor(x, y + 1);
+      display.print(text);
+    }
+  }
+
+  bool isOnNoisePage() const override { return _page == HomePage::NOISE; }
 #endif
   AdvertPath recent[ADVERT_PATH_TABLE_SIZE];
 #if !(defined(UI_NO_DISCOVER_SCREEN) && (UI_NO_DISCOVER_SCREEN + 0 != 0))
@@ -1566,17 +1594,20 @@ public:
       const int sample_ms = NOISE_SPEED_MS[constrain((int)DarktecPrefs::get().noise_idx, 0, 3)];
       if ((long)(millis() - next_noise_sample) >= 0) {
         noise_hist[noise_head] = (int16_t)radio_driver.getNoiseFloor();
+        snr_hist[noise_head] = (int16_t)(radio_driver.getLastSNR() * 10.0f);
         noise_head = (uint8_t)((noise_head + 1) % NOISE_SAMPLES);
         if (noise_count < NOISE_SAMPLES) noise_count++;
         next_noise_sample = millis() + sample_ms;
       }
+
+      const int16_t* series = noiseSeries();
 
       // Auto-scale to the smoothed series, not the raw one: a three-point
       // average never reaches the raw extremes, so scaling to those would
       // reserve a band that no amount of signal could fill.
       int lo = 0, hi = 0;
       for (int i = 0; i < noise_count; i++) {
-        int v = noiseSmoothedAt(i);
+        int v = noiseSmoothedAt(series, i);
         if (i == 0)      { lo = v; hi = v; }
         else if (v < lo) { lo = v; }
         else if (v > hi) { hi = v; }
@@ -1590,12 +1621,11 @@ public:
       }
 
       const int plot_y = hdr_line_h + 9;
-      const int foot_y = display.height() - 9;
+      const int foot_y = display.height() - 10;
       const int plot_h = foot_y - 2 - plot_y;
       int bar_w = display.width() / NOISE_SAMPLES;
       if (bar_w < 1) bar_w = 1;
 
-      char nbuf[24];
       display.setColor(UIColor::secondary_txt);
       display.fillRect(0, plot_y + plot_h - 1, display.width(), 1);
 
@@ -1606,7 +1636,7 @@ public:
       display.setColor(UIColor::primary_txt);
       int prev_y = -1;
       for (int i = 0; i < noise_count; i++) {
-        int v = noiseSmoothedAt(i);
+        int v = noiseSmoothedAt(series, i);
         int y = y_bot - (v - lo) * (y_bot - y_top) / (hi - lo);
         if (y < y_top) y = y_top;
         if (y > y_bot) y = y_bot;
@@ -1621,17 +1651,14 @@ public:
         prev_y = y;
       }
 
-      // Footer: window floor left, live value centred, window ceiling right.
-      snprintf(nbuf, sizeof(nbuf), "%d", lo);
-      display.setCursor(0, foot_y);
-      display.print(nbuf);
-
-      snprintf(nbuf, sizeof(nbuf), "NF: %d", radio_driver.getNoiseFloor());
-      display.drawTextCentered(display.width() / 2, foot_y, nbuf);
-
-      snprintf(nbuf, sizeof(nbuf), "%d", hi);
-      display.setCursor(display.width() - display.getTextWidth(nbuf) - 1, foot_y);
-      display.print(nbuf);
+      // Метки внизу: слева шум, справа SNR; выбранная — инвертирована.
+      // Долгое нажатие переключает, какую кривую рисуем.
+      char lbuf[16], rbuf[16];
+      snprintf(lbuf, sizeof(lbuf), "NF:%ddBm", (int)radio_driver.getNoiseFloor());
+      snprintf(rbuf, sizeof(rbuf), "SNR:%.1fdB", (double)radio_driver.getLastSNR());
+      drawNoiseLabel(display, lbuf, 0, !noise_show_snr);
+      drawNoiseLabel(display, rbuf, display.width() - display.getTextWidth(rbuf) - 2,
+                     noise_show_snr);
 
       return sample_ms;
 #endif
@@ -2303,15 +2330,11 @@ public:
       return true;
     }
 #if UI_NOISE_PAGE == 1 && defined(UI_DARKTEC_SETTINGS)
-    // Долгое нажатие на экране шума листает скорость дорожки, не уходя с
-    // экрана: то же значение, что и пункт NF Speed в подменю [ Darktec ].
+    // Долгое нажатие на экране шума переключает кривую: шумовой пол ↔ SNR.
+    // Скорость дорожки листается тройным нажатием (см. UITask::handleTripleClick).
     if (c == KEY_ENTER && _page == HomePage::NOISE) {
-      DarktecPrefsFormat::Settings s = DarktecPrefs::get();
-      s.noise_idx = (uint8_t)((s.noise_idx + 1) % DarktecPrefsFormat::kNoiseCount);
-      DarktecPrefs::save(s);
-      char msg[24];
-      snprintf(msg, sizeof(msg), "NF Speed: %dms", NOISE_SPEED_MS[s.noise_idx]);
-      _task->showAlert(msg, 2000);
+      noise_show_snr = !noise_show_snr;
+      next_noise_sample = 0;   // перерисовать сразу, не ждать тика
       return true;
     }
 #endif
@@ -3282,6 +3305,20 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
   checkDisplayOn(c);
+#if UI_NOISE_PAGE == 1 && defined(UI_DARKTEC_SETTINGS)
+  // На экране шума тройное листает скорость дорожки, а не глушит буззер:
+  // то же значение, что и пункт NF Speed в подменю [ Darktec ].
+  if (home != NULL && home->isOnNoisePage()) {
+    DarktecPrefsFormat::Settings s = DarktecPrefs::get();
+    s.noise_idx = (uint8_t)((s.noise_idx + 1) % DarktecPrefsFormat::kNoiseCount);
+    DarktecPrefs::save(s);
+    char msg[24];
+    snprintf(msg, sizeof(msg), "NF Speed: %dms", NOISE_SPEED_MS[s.noise_idx]);
+    showAlert(msg, 2000);
+    c = 0;
+    return c;
+  }
+#endif
   toggleBuzzer();
   c = 0;
   return c;

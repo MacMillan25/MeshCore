@@ -21,5 +21,8 @@ public:
   virtual int render(DisplayDriver& display) =0;   // return value is number of millis until next render
   virtual bool handleInput(char c) { return false; }
   virtual void poll() { }
+  // Экран шума: по нему тройное нажатие листает скорость дорожки, а не
+  // глушит буззер. Остальные экраны возвращают false.
+  virtual bool isOnNoisePage() const { return false; }
 };
 
