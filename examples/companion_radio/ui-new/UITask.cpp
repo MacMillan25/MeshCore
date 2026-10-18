@@ -1722,8 +1722,14 @@ public:
                  (double)radio_driver.getLastSNR(),
                  real_hi / 10.0f, real_lo / 10.0f);
       } else {
-        snprintf(lbuf, sizeof(lbuf), "NF:%d ^%d v%d",
-                 (int)radio_driver.getNoiseFloor(), real_hi, real_lo);
+        // Диагностика: NF — опубликованный пол, r — последний сырой замер,
+        // b — сколько замеров попало в последнюю партию. Если b=0, приёмник не
+        // был в RX (проблема приёмника, не графика); если r стоит на месте при
+        // снятой антенне — врёт сам чип, а не расчёт.
+        snprintf(lbuf, sizeof(lbuf), "NF:%d r%d b%u",
+                 (int)radio_driver.getNoiseFloor(),
+                 (int)radio_driver.getLastRawRssi(),
+                 (unsigned)radio_driver.getNoiseBatchSize());
       }
       display.setColor(UIColor::primary_txt);
       display.fillRect(0, display.height() - 10, display.width(), 10);

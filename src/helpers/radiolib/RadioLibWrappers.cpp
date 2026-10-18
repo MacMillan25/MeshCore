@@ -12,9 +12,6 @@
 #define STATE_TX_DONE    4
 #define STATE_INT_READY 16
 
-#define NUM_NOISE_FLOOR_SAMPLES  64
-#define SAMPLING_THRESHOLD  14
-
 static volatile uint8_t state = STATE_IDLE;
 
 // this function is called when a complete packet
@@ -43,9 +40,11 @@ void RadioLibWrapper::begin() {
   _last_raw_rssi = 0;
   _cad_enabled = false;
 
-  // start average out some samples
-  _num_floor_samples = 0;
-  _floor_sample_sum = 0;
+  _rssi_batch_n = 0;
+  _last_batch_n = 0;
+  _next_rssi_sample = 0;
+  _floor_moved_at = 0;
+  _last_agc_reset = 0;
 }
 
 uint32_t RadioLibWrapper::getRngSeed() {
@@ -75,28 +74,46 @@ void RadioLibWrapper::idle() {
 void RadioLibWrapper::triggerNoiseFloorCalibrate(int threshold) {
   _threshold = threshold;
 
-  // Average whatever arrived since the previous call instead of waiting for a full
-  // batch of NUM_NOISE_FLOOR_SAMPLES. One read happens per loop() call, and on a
-  // power-saving build the loop only wakes on interrupts (a few times per second on
-  // nRF52), so a 64-sample batch used to take several seconds: the noise floor - and
-  // the NF graph on the companion - lagged seconds behind reality.
-  int16_t avg;
-  if (_num_floor_samples > 0) {
-    avg = (int16_t)(_floor_sample_sum / (int32_t)_num_floor_samples);
-  } else if (_last_raw_rssi != 0) {
-    // The gate rejected every read (channel above floor + SAMPLING_THRESHOLD), which
-    // means the floor really has risen. Without this the estimate ratchets downward
-    // and never follows it.
-    avg = _last_raw_rssi;
-  } else {
-    return;   // nothing sampled yet: keep the current estimate
+  const uint8_t n = _rssi_batch_n;
+  _last_batch_n = n;
+  _rssi_batch_n = 0;
+  if (n == 0) return;   // приёмник ни разу не был в RX: держим прежнюю оценку
+
+  // Не среднее, а 25-й процентиль: чужая передача и помеха поднимают RSSI, шум
+  // же — это тихий край выборки. Среднее тянулось к помехам, а отсечка «только
+  // замеры ниже (пол + 14)» вообще не давала полу расти и прибивала его к первому
+  // неудачному значению — именно так пол и залипал на -78.
+  int16_t tmp[NOISE_BATCH_MAX];
+  memcpy(tmp, _rssi_batch, n * sizeof(tmp[0]));
+  for (uint8_t i = 1; i < n; i++) {
+    const int16_t v = tmp[i];
+    int8_t j = (int8_t)(i - 1);
+    while (j >= 0 && tmp[j] > v) {
+      tmp[j + 1] = tmp[j];
+      j--;
+    }
+    tmp[j + 1] = v;
   }
-  if (avg < -120) {
-    avg = -120;   // clamp to lower bound of -120 dBm
+  int16_t f = tmp[n / 4];
+  if (f < -120) f = -120;   // нижняя граница шкалы SX126x
+
+  const uint32_t now = millis();
+  if (f + 3 <= _noise_floor || f >= _noise_floor + 3 || _noise_floor == 0) {
+    _floor_moved_at = now;
   }
-  _noise_floor = avg;
-  _num_floor_samples = 0;
-  _floor_sample_sum = 0;
+  _noise_floor = f;
+
+  // Приёмник иногда «слепнет»: чип отдаёт почти постоянный RSSI около -78, пол
+  // замирает и не реагирует ни на антенну, ни на передачи, а через время сам
+  // приходит в себя. Такой пол не физичен — настоящий шум ниже -85 dBm, — и
+  // лечится он сбросом аналогового тракта, тем же, что делает resetAGC при
+  // зависании приёма. Делаем это не чаще раза в минуту.
+  if (_noise_floor > -85 && (uint32_t)(now - _floor_moved_at) > 10000
+      && (_last_agc_reset == 0 || (uint32_t)(now - _last_agc_reset) > 60000)) {
+    _last_agc_reset = now;
+    _floor_moved_at = now;
+    resetAGC();
+  }
 
   #ifdef MESH_DEBUG_NOISE_FLOOR
   MESH_DEBUG_PRINTLN("RadioLibWrapper: noise_floor = %d", (int)_noise_floor);
@@ -115,13 +132,14 @@ void RadioLibWrapper::resetAGC() {
   state = STATE_IDLE;   // trigger a startReceive()
 
   // Reset noise floor sampling so it reconverges from scratch.
-  // Without this, a stuck _noise_floor of -120 makes the sampling threshold
-  // too low (-106) to accept normal samples (~-105), self-reinforcing the
-  // stuck value even after the receiver has recovered.
   _noise_floor = 0;
   _last_raw_rssi = 0;
-  _num_floor_samples = 0;
-  _floor_sample_sum = 0;
+  _rssi_batch_n = 0;
+  _last_batch_n = 0;
+  _next_rssi_sample = 0;
+  // _last_agc_reset намеренно не обнуляем: его ставит защита от повторного
+  // сброса, и обнуление разрешило бы сбрасывать тракт каждый тик.
+  _floor_moved_at = millis();
 }
 
 #if defined(ESP32) && defined(WITH_ESP32_POWER_SAVING)
@@ -142,16 +160,17 @@ void RadioLibWrapper::recoverMissedDioInterrupt() {
 #endif
 
 void RadioLibWrapper::loop() {
-  if (state == STATE_RX && _num_floor_samples < NUM_NOISE_FLOOR_SAMPLES) {
-    if (!isReceivingPacket()) {
-      int rssi = getCurrentRSSI();
-      _last_raw_rssi = (int16_t)rssi;   // remembered for the tick when the gate blocks everything
-      if (rssi < _noise_floor + SAMPLING_THRESHOLD) {  // only consider samples below current floor + sampling THRESHOLD
-        _num_floor_samples++;
-        _floor_sample_sum += rssi;
-      }
-    }
-  }
+  // Замер берётся только когда приёмник действительно слушает и пакета нет: во
+  // время приёма и передачи RSSI отражает сигнал, а не шум.
+  if (state != STATE_RX || isReceivingPacket()) return;
+  // 50 Гц — выше шумовой пол всё равно не нужен, а SPI лишний раз не дёргаем.
+  const uint32_t now = millis();
+  if ((int32_t)(now - _next_rssi_sample) < 0) return;
+  _next_rssi_sample = now + 20;
+
+  const int16_t rssi = (int16_t)getCurrentRSSI();
+  _last_raw_rssi = rssi;
+  if (_rssi_batch_n < NOISE_BATCH_MAX) _rssi_batch[_rssi_batch_n++] = rssi;
 }
 
 void RadioLibWrapper::startRecv() {

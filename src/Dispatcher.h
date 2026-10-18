@@ -63,6 +63,12 @@ public:
 
   virtual int getNoiseFloor() const { return 0; }
 
+  // Диагностика шумового пола: последний сырой замер RSSI и сколько замеров
+  // попало в последнюю партию. Нужны экрану шума, чтобы отличить «врёт график»
+  // от «врёт приёмник».
+  virtual int getLastRawRssi() const { return 0; }
+  virtual int getNoiseBatchSize() const { return 0; }
+
   virtual void triggerNoiseFloorCalibrate(int threshold) { }
 
   virtual void setCADEnabled(bool enable) { }

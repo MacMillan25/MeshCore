@@ -19,8 +19,16 @@ protected:
   int16_t _noise_floor, _threshold;
   int16_t _last_raw_rssi;      // newest RX read, even when the sampling gate rejects it
   bool _cad_enabled;
-  uint16_t _num_floor_samples;
-  int32_t _floor_sample_sum;
+  // Замеры с прошлого тика калибровки. Раньше здесь копился ровно 64 замера и
+  // пол публиковался только после полной партии; из-за сна между пробуждениями
+  // партия набиралась секундами. Теперь публикуется всё, что успело прийти.
+  static const uint8_t NOISE_BATCH_MAX = 48;
+  int16_t  _rssi_batch[NOISE_BATCH_MAX];
+  uint8_t  _rssi_batch_n;
+  uint8_t  _last_batch_n;
+  uint32_t _next_rssi_sample;
+  uint32_t _floor_moved_at;    // когда пол последний раз сдвигался заметно
+  uint32_t _last_agc_reset;
   uint8_t _preamble_sf;
 
   void idle();
@@ -60,6 +68,8 @@ public:
   virtual int16_t performChannelScan();
 
   int getNoiseFloor() const override { return _noise_floor; }
+  int getLastRawRssi() const override { return _last_raw_rssi; }
+  int getNoiseBatchSize() const override { return _last_batch_n; }
   void triggerNoiseFloorCalibrate(int threshold) override;
   void setCADEnabled(bool enable) override { _cad_enabled = enable; }
   void resetAGC() override;
