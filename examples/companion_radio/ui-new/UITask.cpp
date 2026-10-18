@@ -1750,9 +1750,9 @@ public:
         display.fillRect(44, foot_y, 1, 10);
         display.fillRect(86, foot_y, 1, 10);
         display.setCursor(1, foot_y + 1);  display.print(c1);
-        display.setCursor(46, foot_y + 1); display.print("^");
-        display.setCursor(53, foot_y + 1); display.print(c2);
-        display.setCursor(88, foot_y + 1); display.print(c3);
+        display.setCursor(48, foot_y + 1); display.print("^");
+        display.setCursor(55, foot_y + 1); display.print(c2);
+        display.setCursor(90, foot_y + 1); display.print(c3);
       }
 
       return sample_ms;
