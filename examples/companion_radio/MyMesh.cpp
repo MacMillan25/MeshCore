@@ -755,6 +755,8 @@ uint8_t MyMesh::getExtraAckTransmitCount() const {
 }
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
+  if (_listener) _listener->onRxPacket(snr);
+
   const uint8_t* log_raw = raw;
   int log_len = len;
   uint8_t mapped[MAX_TRANS_UNIT];

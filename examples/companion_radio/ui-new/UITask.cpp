@@ -333,31 +333,43 @@ class HomeScreen : public UIScreen {
   bool _shutdown_init;
   int _clock_pm_pending;   // PMs queued for inline display on CLOCK page
 #if UI_NOISE_PAGE == 1
+  // Два независимых буфера: шумовой пол пишется по таймеру (ядро меряет его
+  // периодически), SNR — по факту приёма пакета. Ось X у SNR поэтому не
+  // время, а номер пакета: график честный, но при тишине замирает.
   int16_t       noise_hist[NOISE_SAMPLES] = {};   // шумовой пол, dBm
-  int16_t       snr_hist[NOISE_SAMPLES] = {};     // SNR × 10, dB
-  bool          noise_show_snr = false;           // false = шум, true = SNR
   uint8_t       noise_head = 0;          // next write slot
   uint8_t       noise_count = 0;         // valid entries, grows to NOISE_SAMPLES
   unsigned long next_noise_sample = 0;
 
+  int16_t       snr_hist[NOISE_SAMPLES] = {};     // SNR × 10, dB
+  uint8_t       snr_head = 0;
+  uint8_t       snr_count = 0;
+
+  bool          noise_show_snr = false;           // false = шум, true = SNR
+
+  // Точка SNR по факту приёма — вызывается из MyMesh::logRxRaw.
+  void noteRxSnr(float snr) override {
+    snr_hist[snr_head] = (int16_t)(snr * 10.0f);
+    snr_head = (uint8_t)((snr_head + 1) % NOISE_SAMPLES);
+    if (snr_count < NOISE_SAMPLES) snr_count++;
+  }
+
   // Oldest sample first: index 0 is the leftmost column on screen.
-  int noiseSampleAt(const int16_t* hist, int i) const {
-    return hist[(noise_head + NOISE_SAMPLES - noise_count + i) % NOISE_SAMPLES];
+  int noiseSampleAt(const int16_t* hist, uint8_t head, uint8_t count, int i) const {
+    return hist[(head + NOISE_SAMPLES - count + i) % NOISE_SAMPLES];
   }
 
   // Three-point moving average: the core already averages 64 RSSI reads, but
   // hands over a fresh result only every calibration interval.
-  int noiseSmoothedAt(const int16_t* hist, int i) const {
+  int noiseSmoothedAt(const int16_t* hist, uint8_t head, uint8_t count, int i) const {
     int sum = 0, n = 0;
     for (int k = i - 1; k <= i + 1; k++) {
-      if (k < 0 || k >= noise_count) continue;
-      sum += noiseSampleAt(hist, k);
+      if (k < 0 || k >= count) continue;
+      sum += noiseSampleAt(hist, head, count, k);
       n++;
     }
     return n ? (sum + n / 2) / n : 0;
   }
-
-  const int16_t* noiseSeries() const { return noise_show_snr ? snr_hist : noise_hist; }
 
   // Метка внизу: выбранная — белый блок с чёрным текстом и срезанными
   // углами, невыбранная — обычный серый. Ширина блока фиксированная: две
@@ -1418,7 +1430,8 @@ public:
         display.setCursor(0, y); display.print(tmp); y += line_h;
         snprintf(tmp, sizeof(tmp), "BW:%.2f  CR:%d", _node_prefs->bw, _node_prefs->cr);
         display.setCursor(0, y); display.print(tmp); y += line_h;
-        snprintf(tmp, sizeof(tmp), "TX:%ddBm", _node_prefs->tx_power_dbm);
+        snprintf(tmp, sizeof(tmp), "TX:%ddBm SNR:%.1f", _node_prefs->tx_power_dbm,
+                 (double)radio_driver.getLastSNR());
         display.setCursor(0, y); display.print(tmp); y += line_h;
         snprintf(tmp, sizeof(tmp), _TR("Noise:%d", "Шум:%d"), radio_driver.getNoiseFloor());
         display.setCursor(0, y); display.print(tmp);
@@ -1427,7 +1440,8 @@ public:
         display.setCursor(0, y); display.print(tmp); y += line_h;
         snprintf(tmp, sizeof(tmp), "BW: %03.2f     CR: %d", _node_prefs->bw, _node_prefs->cr);
         display.setCursor(0, y); display.print(tmp); y += line_h;
-        snprintf(tmp, sizeof(tmp), "TX: %ddBm", _node_prefs->tx_power_dbm);
+        snprintf(tmp, sizeof(tmp), "TX:%ddBm SNR:%.1f", _node_prefs->tx_power_dbm,
+                 (double)radio_driver.getLastSNR());
         display.setCursor(0, y); display.print(tmp); y += line_h;
         snprintf(tmp, sizeof(tmp), _TR("Noise floor: %d", "Уровень шума: %d"), radio_driver.getNoiseFloor());
         display.setCursor(0, y); display.print(tmp);
@@ -1596,20 +1610,23 @@ public:
       const int sample_ms = NOISE_SPEED_MS[constrain((int)DarktecPrefs::get().noise_idx, 0, 3)];
       if ((long)(millis() - next_noise_sample) >= 0) {
         noise_hist[noise_head] = (int16_t)radio_driver.getNoiseFloor();
-        snr_hist[noise_head] = (int16_t)(radio_driver.getLastSNR() * 10.0f);
         noise_head = (uint8_t)((noise_head + 1) % NOISE_SAMPLES);
         if (noise_count < NOISE_SAMPLES) noise_count++;
         next_noise_sample = millis() + sample_ms;
       }
 
-      const int16_t* series = noiseSeries();
+      // SNR-буфер заполняется в noteRxSnr() по факту приёма, поэтому у него
+      // свои голова и счётчик.
+      const int16_t* hist = noise_show_snr ? snr_hist : noise_hist;
+      const uint8_t hist_head = noise_show_snr ? snr_head : noise_head;
+      const uint8_t hist_count = noise_show_snr ? snr_count : noise_count;
 
       // Auto-scale to the smoothed series, not the raw one: a three-point
       // average never reaches the raw extremes, so scaling to those would
       // reserve a band that no amount of signal could fill.
       int lo = 0, hi = 0;
-      for (int i = 0; i < noise_count; i++) {
-        int v = noiseSmoothedAt(series, i);
+      for (int i = 0; i < hist_count; i++) {
+        int v = noiseSmoothedAt(hist, hist_head, hist_count, i);
         if (i == 0)      { lo = v; hi = v; }
         else if (v < lo) { lo = v; }
         else if (v > hi) { hi = v; }
@@ -1637,8 +1654,8 @@ public:
       const int y_bot = plot_y + plot_h - 2;
       display.setColor(UIColor::primary_txt);
       int prev_y = -1;
-      for (int i = 0; i < noise_count; i++) {
-        int v = noiseSmoothedAt(series, i);
+      for (int i = 0; i < hist_count; i++) {
+        int v = noiseSmoothedAt(hist, hist_head, hist_count, i);
         int y = y_bot - (v - lo) * (y_bot - y_top) / (hi - lo);
         if (y < y_top) y = y_top;
         if (y > y_bot) y = y_bot;
@@ -2907,6 +2924,13 @@ void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_det
 
 void UITask::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
   if (!hasConnection()) notify(UIEventType::newContactMessage);
+}
+
+void UITask::onRxPacket(float snr) {
+#if UI_NOISE_PAGE == 1
+  // Точка графика SNR появляется по факту приёма, а не по таймеру.
+  if (home != NULL) home->noteRxSnr(snr);
+#endif
 }
 
 void UITask::onControlDataRecv(const mesh::Packet* packet) {
