@@ -143,9 +143,6 @@ public:
       virtual void onChannelDataRecv(mesh::Packet *pkt, const mesh::GroupChannel &channel, uint16_t data_type,
                                      const uint8_t *data, size_t data_len) { }
       virtual void onACKRecv(uint32_t ack_crc) { }
-      // Каждый принятый пакет: SNR из RadioLib. Нужен графику SNR на экране
-      // шума — точка появляется по факту приёма, а не по таймеру.
-      virtual void onRxPacket(float snr) { (void)snr; }
       virtual uint8_t onUnhandledRequest(const ContactInfo &contact, uint32_t sender_timestamp, const uint8_t *data,
                                          uint8_t len, uint8_t *reply) { return 0; /* unknown request type */ }
       virtual bool onUnhandledResponse(const ContactInfo &from, uint32_t tag, const uint8_t* data, uint8_t len) { return false; /* not handled */ }

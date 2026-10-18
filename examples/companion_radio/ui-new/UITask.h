@@ -147,8 +147,6 @@ public:
   void onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_details, const char* text) override;
   void onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) override;
   void onControlDataRecv(const mesh::Packet* pkt) override;
-  // Каждый принятый пакет: SNR уходит в график на экране шума.
-  void onRxPacket(float snr) override;
   void onQueueSizeChanged(int msgcount) override;
   void onShowMessage(uint8_t path_len, const char* from_name, const char* text, int msgcount, bool is_pm) override;
   void onStatusChanged() override { notify(); }

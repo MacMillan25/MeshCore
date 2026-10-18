@@ -344,12 +344,18 @@ class HomeScreen : public UIScreen {
   int16_t       snr_hist[NOISE_SAMPLES] = {};     // SNR × 10, dB
   uint8_t       snr_head = 0;
   uint8_t       snr_count = 0;
+  uint32_t      last_snr_packets = 0;             // счётчик принятых пакетов
 
   bool          noise_show_snr = false;           // false = шум, true = SNR
 
-  // Точка SNR по факту приёма — вызывается из MyMesh::logRxRaw.
-  void noteRxSnr(float snr) override {
-    snr_hist[snr_head] = (int16_t)(snr * 10.0f);
+  // Точка SNR добавляется при изменении счётчика принятых пакетов — в render,
+  // а не по таймеру и не из колбэка. Так работает всегда: счётчик крутится
+  // в драйвере, даже если listener не дергают.
+  void sampleSnrIfNewPacket() {
+    const uint32_t rx_total = radio_driver.getPacketsRecv();
+    if (rx_total == last_snr_packets) return;
+    last_snr_packets = rx_total;
+    snr_hist[snr_head] = (int16_t)(radio_driver.getLastSNR() * 10.0f);
     snr_head = (uint8_t)((snr_head + 1) % NOISE_SAMPLES);
     if (snr_count < NOISE_SAMPLES) snr_count++;
   }
@@ -1615,8 +1621,11 @@ public:
         next_noise_sample = millis() + sample_ms;
       }
 
-      // SNR-буфер заполняется в noteRxSnr() по факту приёма, поэтому у него
-      // свои голова и счётчик.
+      // SNR пишется по факту приёма пакета, а не по таймеру: точка на кадр,
+      // если счётчик пакетов вырос. Шумовой пол при этом продолжает
+      // копиться в свой буфер — переключение вида не останавливает замер.
+      sampleSnrIfNewPacket();
+
       const int16_t* hist = noise_show_snr ? snr_hist : noise_hist;
       const uint8_t hist_head = noise_show_snr ? snr_head : noise_head;
       const uint8_t hist_count = noise_show_snr ? snr_count : noise_count;
@@ -2924,13 +2933,6 @@ void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_det
 
 void UITask::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
   if (!hasConnection()) notify(UIEventType::newContactMessage);
-}
-
-void UITask::onRxPacket(float snr) {
-#if UI_NOISE_PAGE == 1
-  // Точка графика SNR появляется по факту приёма, а не по таймеру.
-  if (home != NULL) home->noteRxSnr(snr);
-#endif
 }
 
 void UITask::onControlDataRecv(const mesh::Packet* packet) {
