@@ -1461,7 +1461,7 @@ public:
         display.setCursor(0, y); display.print(tmp); y += line_h;
         snprintf(tmp, sizeof(tmp), "BW:%.2f  CR:%d", _node_prefs->bw, _node_prefs->cr);
         display.setCursor(0, y); display.print(tmp); y += line_h;
-        snprintf(tmp, sizeof(tmp), "TX:%ddBm SNR:%.1f", _node_prefs->tx_power_dbm,
+        snprintf(tmp, sizeof(tmp), "TX:%ddBm  SNR:%.1f", _node_prefs->tx_power_dbm,
                  (double)radio_driver.getLastSNR());
         display.setCursor(0, y); display.print(tmp); y += line_h;
         snprintf(tmp, sizeof(tmp), _TR("Noise:%d", "Шум:%d"), radio_driver.getNoiseFloor());
@@ -1471,10 +1471,8 @@ public:
         display.setCursor(0, y); display.print(tmp); y += line_h;
         snprintf(tmp, sizeof(tmp), "BW: %03.2f     CR: %d", _node_prefs->bw, _node_prefs->cr);
         display.setCursor(0, y); display.print(tmp); y += line_h;
-        snprintf(tmp, sizeof(tmp), "TX:%ddBm SNR:%.1f", _node_prefs->tx_power_dbm,
+        snprintf(tmp, sizeof(tmp), "TX:%ddBm  SNR:%.1f", _node_prefs->tx_power_dbm,
                  (double)radio_driver.getLastSNR());
-        display.setCursor(0, y); display.print(tmp); y += line_h;
-        snprintf(tmp, sizeof(tmp), _TR("Noise floor: %d", "Уровень шума: %d"), radio_driver.getNoiseFloor());
         display.setCursor(0, y); display.print(tmp);
       }
 #ifndef WITH_WIFI_SWITCHING
