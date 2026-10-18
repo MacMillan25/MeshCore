@@ -14,7 +14,15 @@ void ArduinoSerialInterface::disable() {
 }
 
 bool ArduinoSerialInterface::isConnected() const { 
+#if defined(ARDUINO_ARCH_NRF52) && defined(USE_TINYUSB)
+  // nRF52 + TinyUSB: the CDC knows whether a host has the port open (DTR), so the
+  // answer is real. The old blanket "true" made the companion UI think the app was
+  // attached on every boot: the BLE build drew "< Connected >" instead of the BLE
+  // pairing PIN, so the PIN could never be seen on screen.
+  return (bool)Serial;
+#else
   return true;   // no way of knowing, so assume yes
+#endif
 }
 
 bool ArduinoSerialInterface::isWriteBusy() const {
