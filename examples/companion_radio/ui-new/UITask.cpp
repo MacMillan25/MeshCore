@@ -334,8 +334,9 @@ class HomeScreen : public UIScreen {
   int _clock_pm_pending;   // PMs queued for inline display on CLOCK page
 #if UI_NOISE_PAGE == 1
   // Два независимых буфера: шумовой пол пишется по таймеру (ядро меряет его
-  // периодически), SNR — по факту приёма пакета. Ось X у SNR поэтому не
-  // время, а номер пакета: график честный, но при тишине замирает.
+  // периодически), SNR — по факту приёма пакета. Оба копятся в serviceNoise(),
+  // который вызывается из UITask::loop() всегда — даже когда экран выключен
+  // или показана другая страница.
   int16_t       noise_hist[NOISE_SAMPLES] = {};   // шумовой пол, dBm
   uint8_t       noise_head = 0;          // next write slot
   uint8_t       noise_count = 0;         // valid entries, grows to NOISE_SAMPLES
@@ -346,18 +347,42 @@ class HomeScreen : public UIScreen {
   uint8_t       snr_count = 0;
   uint32_t      last_snr_packets = 0;             // счётчик принятых пакетов
 
+  // Окно усреднения SNR: одно сообщение в меше приходит 2-4 раза
+  // (ретрансляции), и каждая копия даёт свой SNR. Без усреднения график
+  // превращается в пилу, поэтому за окно пишем одну точку — среднее.
+  static const uint32_t SNR_WINDOW_MS = 500;
+  float         snr_acc = 0.0f;
+  uint16_t      snr_acc_n = 0;
+  uint32_t      snr_window_start = 0;
+
   bool          noise_show_snr = false;           // false = шум, true = SNR
 
-  // Точка SNR добавляется при изменении счётчика принятых пакетов — в render,
-  // а не по таймеру и не из колбэка. Так работает всегда: счётчик крутится
-  // в драйвере, даже если listener не дергают.
-  void sampleSnrIfNewPacket() {
+  // Копит шумовой пол и SNR. Вызывается из UITask::loop() каждый цикл,
+  // независимо от того, что на экране.
+  void serviceNoise() override {
+    const int sample_ms = NOISE_SPEED_MS[constrain((int)DarktecPrefs::get().noise_idx, 0, 3)];
+    if ((long)(millis() - next_noise_sample) >= 0) {
+      noise_hist[noise_head] = (int16_t)radio_driver.getNoiseFloor();
+      noise_head = (uint8_t)((noise_head + 1) % NOISE_SAMPLES);
+      if (noise_count < NOISE_SAMPLES) noise_count++;
+      next_noise_sample = millis() + sample_ms;
+    }
+
     const uint32_t rx_total = radio_driver.getPacketsRecv();
-    if (rx_total == last_snr_packets) return;
-    last_snr_packets = rx_total;
-    snr_hist[snr_head] = (int16_t)(radio_driver.getLastSNR() * 10.0f);
-    snr_head = (uint8_t)((snr_head + 1) % NOISE_SAMPLES);
-    if (snr_count < NOISE_SAMPLES) snr_count++;
+    if (rx_total != last_snr_packets) {
+      if (snr_acc_n == 0) snr_window_start = millis();
+      snr_acc += radio_driver.getLastSNR();
+      snr_acc_n++;
+      last_snr_packets = rx_total;
+    }
+    if (snr_acc_n > 0 && (uint32_t)(millis() - snr_window_start) >= SNR_WINDOW_MS) {
+      const float avg = snr_acc / (float)snr_acc_n;
+      snr_hist[snr_head] = (int16_t)(avg * 10.0f);
+      snr_head = (uint8_t)((snr_head + 1) % NOISE_SAMPLES);
+      if (snr_count < NOISE_SAMPLES) snr_count++;
+      snr_acc = 0.0f;
+      snr_acc_n = 0;
+    }
   }
 
   // Oldest sample first: index 0 is the leftmost column on screen.
@@ -1614,19 +1639,8 @@ public:
       // from Settings (NF Speed): the window covers ~6 s at 100 ms and ~64 s at
       // 1000 ms.
       const int sample_ms = NOISE_SPEED_MS[constrain((int)DarktecPrefs::get().noise_idx, 0, 3)];
-      // Шумовой пол пишется всегда, независимо от того, что показано на
-      // экране: иначе переключение на SNR останавливало бы замер.
-      if ((long)(millis() - next_noise_sample) >= 0) {
-        noise_hist[noise_head] = (int16_t)radio_driver.getNoiseFloor();
-        noise_head = (uint8_t)((noise_head + 1) % NOISE_SAMPLES);
-        if (noise_count < NOISE_SAMPLES) noise_count++;
-        next_noise_sample = millis() + sample_ms;
-      }
-
-      // SNR пишется по факту приёма пакета, а не по таймеру: точка на кадр,
-      // если счётчик пакетов вырос. Шумовой пол при этом продолжает
-      // копиться в свой буфер — переключение вида не останавливает замер.
-      sampleSnrIfNewPacket();
+      // Данные копит serviceNoise() в UITask::loop() — здесь только рисуем,
+      // поэтому график не зависит от того, открыта ли страница.
 
       const int16_t* hist = noise_show_snr ? snr_hist : noise_hist;
       const uint8_t hist_head = noise_show_snr ? snr_head : noise_head;
@@ -3239,6 +3253,10 @@ void UITask::loop() {
   _saveElapsedToPrefs();  // saves at most once per 60s; turnOff() also triggers this
 
   if (curr) curr->poll();
+
+  // Фоновый сбор данных для графика шума/SNR: идёт всегда, независимо от
+  // того, включён экран и какая страница открыта.
+  if (home) home->serviceNoise();
 
   if (_display != NULL && _display->isOn()) {
     if (millis() >= _next_refresh && curr) {
