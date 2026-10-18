@@ -43,8 +43,6 @@ void RadioLibWrapper::begin() {
   _rssi_batch_n = 0;
   _last_batch_n = 0;
   _next_rssi_sample = 0;
-  _floor_moved_at = 0;
-  _last_agc_reset = 0;
 }
 
 uint32_t RadioLibWrapper::getRngSeed() {
@@ -96,24 +94,12 @@ void RadioLibWrapper::triggerNoiseFloorCalibrate(int threshold) {
   }
   int16_t f = tmp[n / 4];
   if (f < -120) f = -120;   // нижняя граница шкалы SX126x
-
-  const uint32_t now = millis();
-  if (f + 3 <= _noise_floor || f >= _noise_floor + 3 || _noise_floor == 0) {
-    _floor_moved_at = now;
-  }
   _noise_floor = f;
 
-  // Приёмник иногда «слепнет»: чип отдаёт почти постоянный RSSI около -78, пол
-  // замирает и не реагирует ни на антенну, ни на передачи, а через время сам
-  // приходит в себя. Такой пол не физичен — настоящий шум ниже -85 dBm, — и
-  // лечится он сбросом аналогового тракта, тем же, что делает resetAGC при
-  // зависании приёма. Делаем это не чаще раза в минуту.
-  if (_noise_floor > -85 && (uint32_t)(now - _floor_moved_at) > 10000
-      && (_last_agc_reset == 0 || (uint32_t)(now - _last_agc_reset) > 60000)) {
-    _last_agc_reset = now;
-    _floor_moved_at = now;
-    resetAGC();
-  }
+  // Самолечения здесь нет намеренно. Высокий и неподвижный пол — не признак
+  // «ослепшего» приёмника: у модулей с LNA (E22P) снятая антенна оставляет вход
+  // открытым, и тракт честно шумит на -76 dBm. Сброс аналоговой части такой пол
+  // не меняет, а приём рвёт зря.
 
   #ifdef MESH_DEBUG_NOISE_FLOOR
   MESH_DEBUG_PRINTLN("RadioLibWrapper: noise_floor = %d", (int)_noise_floor);
@@ -137,9 +123,6 @@ void RadioLibWrapper::resetAGC() {
   _rssi_batch_n = 0;
   _last_batch_n = 0;
   _next_rssi_sample = 0;
-  // _last_agc_reset намеренно не обнуляем: его ставит защита от повторного
-  // сброса, и обнуление разрешило бы сбрасывать тракт каждый тик.
-  _floor_moved_at = millis();
 }
 
 #if defined(ESP32) && defined(WITH_ESP32_POWER_SAVING)

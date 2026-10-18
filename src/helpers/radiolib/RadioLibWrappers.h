@@ -27,8 +27,6 @@ protected:
   uint8_t  _rssi_batch_n;
   uint8_t  _last_batch_n;
   uint32_t _next_rssi_sample;
-  uint32_t _floor_moved_at;    // когда пол последний раз сдвигался заметно
-  uint32_t _last_agc_reset;
   uint8_t _preamble_sf;
 
   void idle();
