@@ -92,7 +92,7 @@ inline Settings buildFlagDefaults() {
 #endif
   s.module = MOD_E22_900M33S;
   s.auto_off_idx = 0;
-  s.noise_idx = 2;  // 500 мс — как было в 1.17.1
+  s.noise_idx = 0;  // 100 мс: скорость NF в памяти не хранится, это стартовое
   s.capacity_mode = CAP_USER;
   s.brightness = BRI_HIGH;
   sanitize(s);
@@ -105,7 +105,7 @@ inline void sanitize(Settings& s) {
   }
   if (s.module > MOD_E22P_868M30S) s.module = MOD_E22_900M33S;
   if (s.auto_off_idx >= kAutoOffCount) s.auto_off_idx = 0;
-  if (s.noise_idx >= kNoiseCount) s.noise_idx = 2;
+  if (s.noise_idx >= kNoiseCount) s.noise_idx = 0;
   if (s.capacity_mode >= kCapacityModeCount) s.capacity_mode = CAP_USER;
   if (s.brightness >= kBrightnessCount) s.brightness = BRI_HIGH;
 }

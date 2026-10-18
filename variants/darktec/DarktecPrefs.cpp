@@ -38,6 +38,9 @@ void ensureLoaded() {
       s = parsed;
     }
   }
+  // Скорость NF не хранится: при старте всегда 100 мс (индекс 0). В файле байт
+  // остаётся ради совместимости формата, но значение из него не читается.
+  s.noise_idx = 0;
   current = s;
 }
 
@@ -57,8 +60,14 @@ bool save(const Settings& in) {
   Settings s = in;
   sanitize(s);
 
+  // В файл скорость NF не пишем (всегда 0): она живёт только в RAM до
+  // перезагрузки, а в памяти сохраняем то, что попросили — иначе тройное
+  // нажатие на экране шума не сработает до следующего старта.
+  Settings file_s = s;
+  file_s.noise_idx = 0;
+
   uint8_t buf[kWireSize];
-  const size_t n = serialize(s, buf, sizeof(buf));
+  const size_t n = serialize(file_s, buf, sizeof(buf));
   if (n != kWireSize) return false;
 
   Adafruit_LittleFS_Namespace::File f = InternalFS.open(kTmpPath, Adafruit_LittleFS_Namespace::FILE_O_WRITE);

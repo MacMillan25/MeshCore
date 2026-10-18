@@ -462,9 +462,6 @@ class HomeScreen : public UIScreen {
   unsigned long _darktec_note_until = 0;
   int           _darktec_note_item = 0;
   char          _darktec_note[24] = "";
-  // Режим правки значения пункта (значение в [скобках]): вход — долгое
-  // нажатие на пункте, клик = увеличить, двойной = уменьшить, долгое — выход.
-  bool          _darktec_editing = false;
 #endif
   int           _pm_clock_mode  = 1;   // 0=all msgs switch screen, 1=PM inline only
 
@@ -668,7 +665,7 @@ public:
     switch (page) {
 #ifdef UI_DARKTEC_SETTINGS
       case SettingsPage::ROOT:    return 6;   // + [ Darktec ]
-      case SettingsPage::DARKTEC_PAGE: return 6;   // 5 параметров + "Back" внизу
+      case SettingsPage::DARKTEC_PAGE: return 5;   // 4 параметра + "Back" внизу
 #else
       case SettingsPage::ROOT:    return 5;
 #endif
@@ -742,15 +739,14 @@ public:
     else if (page == SettingsPage::DARKTEC_PAGE) {
       // Своя строка выхода внизу списка (как в официалке): i==5 — "Back",
       // пункты — i==0..4. Без стрелки: курсор ">" рядом с "<" сливается.
-      if (i == 5) return "Back";
+      if (i == 4) return "Back";
       if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
         return _darktec_note;
       }
       if (i == 0) return "Capacity";
       if (i == 1) return "Screen on";
-      if (i == 2) return "NF Speed";
-      if (i == 3) return "Brightness";
-      if (i == 4) return "Radio mod";
+      if (i == 2) return "Brightness";
+      if (i == 3) return "Radio mod";
     }
 #endif
     else if (i == 0) {
@@ -932,26 +928,19 @@ public:
         static const char* on_names[DarktecPrefsFormat::kAutoOffCount] = { "15s", "30s", "1m", "5m", "1h" };
         snprintf(raw, sizeof(raw), "%s", on_names[s.auto_off_idx < DarktecPrefsFormat::kAutoOffCount ? s.auto_off_idx : 0]);
       } else if (i == 2) {
-        static const char* nf_names[DarktecPrefsFormat::kNoiseCount] = { "100ms", "250ms", "500ms", "1000ms" };
-        snprintf(raw, sizeof(raw), "%s", nf_names[s.noise_idx < DarktecPrefsFormat::kNoiseCount ? s.noise_idx : 2]);
-      } else if (i == 3) {
         // Яркость: Low / Mid / High — словами, не цифрами.
         static const char* bri_names[DarktecPrefsFormat::kBrightnessCount] =
             { "Low", "Mid", "High" };
         snprintf(raw, sizeof(raw), "%s",
                  bri_names[s.brightness < DarktecPrefsFormat::kBrightnessCount
                                ? s.brightness : DarktecPrefsFormat::BRI_HIGH]);
-      } else if (i == 4) {
+      } else if (i == 3) {
         // Порядок обязан совпадать с DarktecPrefsFormat::ModuleCode.
         static const char* mod_names[4] = { "E22-33S", "E22-30S", "RA62", "E22P" };
         snprintf(raw, sizeof(raw), "%s", mod_names[s.module < 4 ? s.module : 0]);
       }
       if (raw[0]) {
-        if (_darktec_editing && _settings_sel == i) {
-          snprintf(val, val_len, "[%s]", raw);   // маркер режима правки
-        } else {
-          snprintf(val, val_len, "%s", raw);
-        }
+        snprintf(val, val_len, "%s", raw);
       }
       return true;
     }
@@ -1004,7 +993,7 @@ public:
         else if (prev == SettingsPage::COMMS) _settings_sel = 2;
         else if (prev == SettingsPage::SYSTEM) _settings_sel = 3;
 #ifdef UI_DARKTEC_SETTINGS
-        else if (prev == SettingsPage::DARKTEC_PAGE) { _settings_sel = 4; _darktec_editing = false; }
+        else if (prev == SettingsPage::DARKTEC_PAGE) { _settings_sel = 4; }
 #endif
         _settings_scroll = 0;
       }
@@ -1120,11 +1109,10 @@ public:
     }
 
 #ifdef UI_DARKTEC_SETTINGS
-    // Darktec: правка /darktec.prefs. Пункты — Capacity, Screen on, NF Speed,
+    // Darktec: правка /darktec.prefs. Пункты — Capacity, Screen on, Brightness,
     // Radio mod; "Back" — последняя строка (i==4), возврат в корень настроек.
-    // Ёмкость и радиомодуль применяются сразу, без перезагрузки; индекс
-    // времени горения экрана читает UITask (таймер auto-off), здесь только
-    // запись поля.
+    // Навигация — как в остальных меню: долгое нажатие листает значение вперёд,
+    // короткое ведёт курсор вниз, двойное выходит из подстраницы.
     if (page == SettingsPage::DARKTEC_PAGE) {
       DarktecPrefs::Settings s = DarktecPrefs::get();
       if (i == 0) {
@@ -1139,10 +1127,6 @@ public:
         s.auto_off_idx = fwd ? (s.auto_off_idx + 1) % n
                              : (s.auto_off_idx + n - 1) % n;
       } else if (i == 2) {
-        const uint8_t n = DarktecPrefsFormat::kNoiseCount;
-        s.noise_idx = fwd ? (s.noise_idx + 1) % n
-                          : (s.noise_idx + n - 1) % n;
-      } else if (i == 3) {
         // Яркость: Dim (0) → Normal (128) → Bright (255). Применяется сразу:
         // это одна I2C-команда контраста, перезагрузка не нужна.
         const uint8_t n = DarktecPrefsFormat::kBrightnessCount;
@@ -1150,16 +1134,15 @@ public:
                                      : (s.brightness + n - 1) % n);
         DisplayDriver* d = _task->getDisplay();
         if (d) d->setContrast(DarktecPrefsFormat::brightnessContrast(s.brightness));
-      } else if (i == 4) {
+      } else if (i == 3) {
         s.module = fwd ? (s.module + 1) % 4 : (s.module + 3) % 4;
         board.setRadioModule(s.module);   // RF-тракт и ETA — сразу
-      } else if (i == 5) {
+      } else if (i == 4) {
         // Back — возврат в корень настроек (тот же переход, что у общей
         // строки i==0 на других подстраницах).
         _settings_page = SettingsPage::ROOT;
         _settings_sel = 4;
         _settings_scroll = 0;
-        _darktec_editing = false;
         return;
       } else {
         return;
@@ -2302,46 +2285,6 @@ public:
     if (_page == HomePage::SETTINGS && _in_settings) {
       int total_n = settingsPageItemCount(_settings_page);
 
-#ifdef UI_DARKTEC_SETTINGS
-      // Страница Darktec: правка значения — отдельный режим (как в
-      // официалке). В правке: клик = увеличить, двойной (KEY_PREV) =
-      // уменьшить, долгое (KEY_ENTER) = выйти из правки. Вне правки
-      // долгое на пункте входит в правку, KEY_PREV двигает курсор вверх
-      // (а не выходит из подстраницы — у платы с одной кнопкой иначе
-      // вверх не добраться), выход только строкой "< Назад".
-      // ВАЖНО: handleInput — одна функция, generic-код ниже по тексту;
-      // «не обработано» — провал сквозь блок, не return false.
-      if (_settings_page == SettingsPage::DARKTEC_PAGE) {
-        if (_darktec_editing) {
-          if (c == KEY_NEXT) {
-            onSettingPress(_settings_page, _settings_sel, true);
-            return true;
-          }
-          if (c == KEY_PREV) {
-            onSettingPress(_settings_page, _settings_sel, false);
-            return true;
-          }
-          if (c == KEY_ENTER) {
-            _darktec_editing = false;
-            return true;
-          }
-          return true;  // в правке остальное глотаем
-        }
-        if (c == KEY_ENTER && _settings_sel < total_n - 1) {
-          _darktec_editing = true;   // долгое на пункте — правка значения
-          return true;
-        }
-        if (c == KEY_PREV) {
-          // двойной = курсор вверх (generic KEY_PREV вышел бы из подстраницы)
-          _settings_sel = (_settings_sel + total_n - 1) % total_n;
-          while (isSettingHidden(_settings_page, _settings_sel)) _settings_sel = (_settings_sel + total_n - 1) % total_n;
-          if (_settings_sel < _settings_scroll) _settings_scroll = _settings_sel;
-          return true;
-        }
-        // KEY_NEXT (вниз) и KEY_ENTER на "Back" (i==4) проваливаются в generic
-      }
-#endif
-
       // ● long (KEY_CANCEL) or KEY_PREV = exit subpage or settings
       if (c == KEY_CANCEL || c == KEY_PREV) {
         if (_settings_page == SettingsPage::CODECS) {
@@ -2356,7 +2299,7 @@ public:
           else if (prev == SettingsPage::COMMS) _settings_sel = 2;
           else if (prev == SettingsPage::SYSTEM) _settings_sel = 3;
 #ifdef UI_DARKTEC_SETTINGS
-          else if (prev == SettingsPage::DARKTEC_PAGE) { _settings_sel = 4; _darktec_editing = false; }
+          else if (prev == SettingsPage::DARKTEC_PAGE) { _settings_sel = 4; }
 #endif
           _settings_scroll = 0;
         } else {
