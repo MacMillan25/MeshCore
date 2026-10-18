@@ -1715,30 +1715,39 @@ public:
       }
 
       // Нижняя полоса разбита на три ячейки: текущее, максимум и минимум окна.
-      // Разделители на 45 и 80 px: первая ячейка шире (в ней «NF:-105»), вторая
-      // и третья — по пять знаков. ^/v вместо стрелок: стрелок 0x18/0x19 в
-      // кириллической таблице шрифта нет, а эти символы есть.
-      char c1[12], c2[12], c3[12];
+      // ^/v вместо стрелок: стрелок 0x18/0x19 в кириллической таблице шрифта нет.
+      //
+      // NF: ячейка с числом 45 px, во второй знак «^» отдельно и число на 1 px
+      // правее (иначе минус липнет к знаку), в третьей вся ячейка сдвинута на
+      // 3 px вправо. SNR: подпись полная и число бывает двузначным
+      // («SNR:-13.0» = 54 px), поэтому стенки другие — 54 и 91 px.
+      char c1[16], c2[16], c3[16];
       if (noise_show_snr) {
-        snprintf(c1, sizeof(c1), "S:%.1f", (double)radio_driver.getLastSNR());
+        snprintf(c1, sizeof(c1), "SNR:%.1f", (double)radio_driver.getLastSNR());
         snprintf(c2, sizeof(c2), "^%.1f", real_hi / 10.0f);
         snprintf(c3, sizeof(c3), "v%.1f", real_lo / 10.0f);
       } else {
         snprintf(c1, sizeof(c1), "NF:%d", (int)radio_driver.getNoiseFloor());
-        snprintf(c2, sizeof(c2), "^%d", real_hi);
+        snprintf(c2, sizeof(c2), "%d", real_hi);   // знак «^» печатается отдельно
         snprintf(c3, sizeof(c3), "v%d", real_lo);
       }
       display.setColor(UIColor::primary_txt);
       display.fillRect(0, foot_y, display.width(), 10);
       display.setColor(UIColor::window_bkg);
-      display.fillRect(45, foot_y, 1, 10);
-      display.fillRect(84, foot_y, 1, 10);
-      display.setCursor(1, foot_y + 1);
-      display.print(c1);
-      display.setCursor(47, foot_y + 1);
-      display.print(c2);
-      display.setCursor(86, foot_y + 1);
-      display.print(c3);
+      if (noise_show_snr) {
+        display.fillRect(54, foot_y, 1, 10);
+        display.fillRect(91, foot_y, 1, 10);
+        display.setCursor(0, foot_y + 1);  display.print(c1);
+        display.setCursor(55, foot_y + 1); display.print(c2);
+        display.setCursor(92, foot_y + 1); display.print(c3);
+      } else {
+        display.fillRect(45, foot_y, 1, 10);
+        display.fillRect(84, foot_y, 1, 10);
+        display.setCursor(1, foot_y + 1);  display.print(c1);
+        display.setCursor(47, foot_y + 1); display.print("^");
+        display.setCursor(54, foot_y + 1); display.print(c2);
+        display.setCursor(89, foot_y + 1); display.print(c3);
+      }
 
       return sample_ms;
 #endif
