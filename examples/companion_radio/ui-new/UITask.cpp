@@ -362,7 +362,21 @@ class HomeScreen : public UIScreen {
   void serviceNoise() override {
     const int sample_ms = NOISE_SPEED_MS[constrain((int)DarktecPrefs::get().noise_idx, 0, 3)];
     if ((long)(millis() - next_noise_sample) >= 0) {
-      noise_hist[noise_head] = (int16_t)radio_driver.getNoiseFloor();
+      const int16_t v = (int16_t)radio_driver.getNoiseFloor();
+      // Заполняем пропущенные такты предыдущим значением: основной цикл на nRF52
+      // спит до прерывания, поэтому замер нередко приходит на несколько интервалов
+      // позже. Без добивки окно молча растягивалось — при шаге 250 мс оно выходило
+      // 46 с вместо 16 с, и график выглядел застывшим.
+      uint32_t late = (uint32_t)(millis() - next_noise_sample) / (uint32_t)sample_ms;
+      if (late > NOISE_SAMPLES - 1) late = NOISE_SAMPLES - 1;
+      for (uint32_t k = 0; k < late; k++) {
+        noise_hist[noise_head] = noise_count
+            ? noise_hist[(uint8_t)((noise_head + NOISE_SAMPLES - 1) % NOISE_SAMPLES)]
+            : v;
+        noise_head = (uint8_t)((noise_head + 1) % NOISE_SAMPLES);
+        if (noise_count < NOISE_SAMPLES) noise_count++;
+      }
+      noise_hist[noise_head] = v;
       noise_head = (uint8_t)((noise_head + 1) % NOISE_SAMPLES);
       if (noise_count < NOISE_SAMPLES) noise_count++;
       next_noise_sample = millis() + sample_ms;
@@ -3299,6 +3313,10 @@ void UITask::loop() {
       _auto_off = millis() + autoOffMillis();
     }
 #endif
+    if (isNoiseMeasurementActive()) {
+      // Режим измерения: пока открыт экран шума, экран не гаснет.
+      _auto_off = millis() + autoOffMillis();
+    }
     if (_clock_dim_mode == 1) {
       // OFF: no dim while on CLOCK page
       if (home && ((HomeScreen*)home)->isOnClockPage())

@@ -735,7 +735,13 @@ void loop() {
     // says whether to stay awake while the app is connected, or not to sleep at all.
     // AUTO is what this platform always did.
     const uint8_t power_mode = the_mesh.getNodePrefs()->power_mode;
-    if (power_mode != POWER_MODE_OFF
+    bool stay_awake = false;
+#ifdef DISPLAY_CLASS
+    // Экран шума — режим измерения: шаг дорожки задаётся временем, поэтому между
+    // пробуждениями спать нельзя, иначе интервал растягивается в разы.
+    stay_awake = ui_task.isNoiseMeasurementActive();
+#endif
+    if (!stay_awake && power_mode != POWER_MODE_OFF
         && (power_mode != POWER_MODE_CONSERVATIVE || !the_mesh.isAppConnected())) {
       board.sleep(0);
     }

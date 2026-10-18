@@ -100,6 +100,12 @@ public:
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }
   bool hasDisplay() const { return _display != NULL; }
+  // Режим измерения шума: экран шума открыт и горит. Пока он открыт, экран не
+  // гаснет и процессор не уходит в сон между пробуждениями — иначе шаг дорожки
+  // растягивается в несколько раз.
+  bool isNoiseMeasurementActive() const {
+    return home != NULL && home->isOnNoisePage() && _display != NULL && _display->isOn();
+  }
   DisplayDriver* getDisplay() const { return _display; }
   bool isEinkDisplay() const { return _display != nullptr && _display->isEink(); }
   bool isUsbConnected() const { return _usb_connected; }
