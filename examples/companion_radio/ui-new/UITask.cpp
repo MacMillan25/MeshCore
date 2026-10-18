@@ -360,9 +360,11 @@ class HomeScreen : public UIScreen {
   const int16_t* noiseSeries() const { return noise_show_snr ? snr_hist : noise_hist; }
 
   // Метка внизу: выбранная — белый блок с чёрным текстом и срезанными
-  // углами, невыбранная — обычный серый. Как на экране шума у beeline.
-  void drawNoiseLabel(DisplayDriver& display, const char* text, int x, bool selected) {
-    const int w = display.getTextWidth(text) + 2;
+  // углами, невыбранная — обычный серый. Ширина блока фиксированная: две
+  // метки делят экран на равные половины, поэтому текст не наезжает сам на
+  // себя даже на живом OLED, где глиф шире расчётного.
+  void drawNoiseLabel(DisplayDriver& display, const char* text, int x, int w,
+                      bool selected) {
     const int y = display.height() - 10;
     if (selected) {
       display.setColor(UIColor::primary_txt);
@@ -372,11 +374,11 @@ class HomeScreen : public UIScreen {
       display.fillRect(x + w - 1, y, 1, 1);
       display.fillRect(x, y + 9, 1, 1);
       display.fillRect(x + w - 1, y + 9, 1, 1);
-      display.setCursor(x + 2, y + 1);
+      display.setCursor(x + 1, y + 1);
       display.print(text);
     } else {
       display.setColor(UIColor::secondary_txt);
-      display.setCursor(x, y + 1);
+      display.setCursor(x + 1, y + 1);
       display.print(text);
     }
   }
@@ -1653,11 +1655,14 @@ public:
 
       // Метки внизу: слева шум, справа SNR; выбранная — инвертирована.
       // Долгое нажатие переключает, какую кривую рисуем.
+      // Две равные половины (61 px) и зазор 6 px между ними: на живом OLED
+      // глиф шире расчётного, и метки, прижатые друг к другу, сливались.
       char lbuf[16], rbuf[16];
       snprintf(lbuf, sizeof(lbuf), "NF:%ddBm", (int)radio_driver.getNoiseFloor());
       snprintf(rbuf, sizeof(rbuf), "SNR:%.1fdB", (double)radio_driver.getLastSNR());
-      drawNoiseLabel(display, lbuf, 0, !noise_show_snr);
-      drawNoiseLabel(display, rbuf, display.width() - display.getTextWidth(rbuf) - 2,
+      const int label_w = 61;
+      drawNoiseLabel(display, lbuf, 0, label_w, !noise_show_snr);
+      drawNoiseLabel(display, rbuf, display.width() - label_w, label_w,
                      noise_show_snr);
 
       return sample_ms;
