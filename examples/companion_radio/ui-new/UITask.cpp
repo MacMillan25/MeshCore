@@ -1614,6 +1614,8 @@ public:
       // from Settings (NF Speed): the window covers ~6 s at 100 ms and ~64 s at
       // 1000 ms.
       const int sample_ms = NOISE_SPEED_MS[constrain((int)DarktecPrefs::get().noise_idx, 0, 3)];
+      // Шумовой пол пишется всегда, независимо от того, что показано на
+      // экране: иначе переключение на SNR останавливало бы замер.
       if ((long)(millis() - next_noise_sample) >= 0) {
         noise_hist[noise_head] = (int16_t)radio_driver.getNoiseFloor();
         noise_head = (uint8_t)((noise_head + 1) % NOISE_SAMPLES);
@@ -2365,7 +2367,9 @@ public:
     // Скорость дорожки листается тройным нажатием (см. UITask::handleTripleClick).
     if (c == KEY_ENTER && _page == HomePage::NOISE) {
       noise_show_snr = !noise_show_snr;
-      next_noise_sample = 0;   // перерисовать сразу, не ждать тика
+      // Таймер шумового пола не трогаем: его тик идёт своим чередом, а кадр
+      // перерисуется на ближайшем render. Раньше здесь стоял сброс в 0 —
+      // после него страница переставала обновляться.
       return true;
     }
 #endif
