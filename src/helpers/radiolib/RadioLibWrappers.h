@@ -17,6 +17,7 @@ protected:
   mesh::MainBoard* _board;
   uint32_t n_recv, n_sent, n_recv_errors;
   int16_t _noise_floor, _threshold;
+  int16_t _last_raw_rssi;      // newest RX read, even when the sampling gate rejects it
   bool _cad_enabled;
   uint16_t _num_floor_samples;
   int32_t _floor_sample_sum;
