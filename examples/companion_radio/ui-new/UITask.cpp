@@ -1717,15 +1717,21 @@ public:
       // Нижняя полоса разбита на три ячейки: текущее, максимум и минимум окна.
       // ^/v вместо стрелок: стрелок 0x18/0x19 в кириллической таблице шрифта нет.
       //
-      // NF: ячейка с числом 45 px, во второй знак «^» отдельно и число на 1 px
-      // правее (иначе минус липнет к знаку), в третьей вся ячейка сдвинута на
-      // 3 px вправо. SNR: подпись полная и число бывает двузначным
-      // («SNR:-13.0» = 54 px), поэтому стенки другие — 54 и 91 px.
+      // NF: первая ячейка 44 px («NF:-105» = 42), вторая и третья равные — по
+      // 41 px, стенки на 44 и 86. Во второй знак «^» отдельно и число на 1 px
+      // правее, иначе минус липнет к знаку.
+      // SNR: подпись полная и число бывает двузначным («SNR:-13.0» = 54 px),
+      // поэтому стенки другие — 54 и 91 px. Пробел после «:», «^», «v» ставится
+      // только перед положительным числом: у отрицательного знак минус уже
+      // отделяет, а лишний пробел вылезает за стенку.
       char c1[16], c2[16], c3[16];
       if (noise_show_snr) {
-        snprintf(c1, sizeof(c1), "SNR:%.1f", (double)radio_driver.getLastSNR());
-        snprintf(c2, sizeof(c2), "^%.1f", real_hi / 10.0f);
-        snprintf(c3, sizeof(c3), "v%.1f", real_lo / 10.0f);
+        const float v_cur = radio_driver.getLastSNR();
+        const float v_max = real_hi / 10.0f;
+        const float v_min = real_lo / 10.0f;
+        snprintf(c1, sizeof(c1), "SNR:%s%.1f", v_cur < 0 ? "" : " ", (double)v_cur);
+        snprintf(c2, sizeof(c2), "^%s%.1f", v_max < 0 ? "" : " ", (double)v_max);
+        snprintf(c3, sizeof(c3), "v%s%.1f", v_min < 0 ? "" : " ", (double)v_min);
       } else {
         snprintf(c1, sizeof(c1), "NF:%d", (int)radio_driver.getNoiseFloor());
         snprintf(c2, sizeof(c2), "%d", real_hi);   // знак «^» печатается отдельно
@@ -1741,12 +1747,12 @@ public:
         display.setCursor(55, foot_y + 1); display.print(c2);
         display.setCursor(92, foot_y + 1); display.print(c3);
       } else {
-        display.fillRect(45, foot_y, 1, 10);
-        display.fillRect(84, foot_y, 1, 10);
+        display.fillRect(44, foot_y, 1, 10);
+        display.fillRect(86, foot_y, 1, 10);
         display.setCursor(1, foot_y + 1);  display.print(c1);
-        display.setCursor(47, foot_y + 1); display.print("^");
-        display.setCursor(54, foot_y + 1); display.print(c2);
-        display.setCursor(89, foot_y + 1); display.print(c3);
+        display.setCursor(46, foot_y + 1); display.print("^");
+        display.setCursor(53, foot_y + 1); display.print(c2);
+        display.setCursor(88, foot_y + 1); display.print(c3);
       }
 
       return sample_ms;
