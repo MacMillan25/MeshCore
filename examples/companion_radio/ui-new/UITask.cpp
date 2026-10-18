@@ -1656,20 +1656,24 @@ public:
       }
       // A floor on the span keeps a dead-flat trace from being stretched into
       // fake detail.
+      const int real_lo = lo, real_hi = hi;   // для подписей шкалы
       if (hi - lo < 8) {
         int mid = (lo + hi) / 2;
         lo = mid - 4;
         hi = mid + 4;
       }
 
+      // Дорожка на всю ширину: 64 сэмпла по 2 px — ровно экран.
+      const int plot_x = 0;
       const int plot_y = hdr_line_h + 9;
       const int foot_y = display.height() - 10;
       const int plot_h = foot_y - 2 - plot_y;
-      int bar_w = display.width() / NOISE_SAMPLES;
+      const int plot_w = display.width();
+      int bar_w = plot_w / NOISE_SAMPLES;
       if (bar_w < 1) bar_w = 1;
 
       display.setColor(UIColor::secondary_txt);
-      display.fillRect(0, plot_y + plot_h - 1, display.width(), 1);
+      display.fillRect(plot_x, plot_y + plot_h - 1, plot_w, 1);
 
       // A trace, not filled bars: filled bars of a steady floor merge into one
       // slab and hide the very variation they exist to show.
@@ -1684,26 +1688,32 @@ public:
         if (y > y_bot) y = y_bot;
 
         if (prev_y < 0) {
-          display.fillRect(i * bar_w, y, bar_w, 2);
+          display.fillRect(plot_x + i * bar_w, y, bar_w, 2);
         } else {
           int top = (y < prev_y) ? y : prev_y;
           int bot = (y < prev_y) ? prev_y : y;
-          display.fillRect(i * bar_w, top, bar_w, bot - top + 2);
+          display.fillRect(plot_x + i * bar_w, top, bar_w, bot - top + 2);
         }
         prev_y = y;
       }
 
-      // Метки внизу: слева шум, справа SNR; выбранная — инвертирована.
-      // Долгое нажатие переключает, какую кривую рисуем.
-      // Две равные половины (61 px) и зазор 6 px между ними: на живом OLED
-      // глиф шире расчётного, и метки, прижатые друг к другу, сливались.
-      char lbuf[16], rbuf[16];
-      snprintf(lbuf, sizeof(lbuf), "NF:%ddBm", (int)radio_driver.getNoiseFloor());
-      snprintf(rbuf, sizeof(rbuf), "SNR:%.1fdB", (double)radio_driver.getLastSNR());
-      const int label_w = 61;
-      drawNoiseLabel(display, lbuf, 0, label_w, !noise_show_snr);
-      drawNoiseLabel(display, rbuf, display.width() - label_w, label_w,
-                     noise_show_snr);
+      // Шкала ушла в нижнюю строку: там же текущее значение и диапазон окна.
+      // Одна полоса на всю ширину — и место под min/max, и видно, какая
+      // кривая выбрана (полоса всегда инвертирована).
+      char lbuf[28];
+      if (noise_show_snr) {
+        snprintf(lbuf, sizeof(lbuf), "SNR:%.1f %.1f/%.1f",
+                 (double)radio_driver.getLastSNR(),
+                 real_lo / 10.0f, real_hi / 10.0f);
+      } else {
+        snprintf(lbuf, sizeof(lbuf), "NF:%d %d/%d",
+                 (int)radio_driver.getNoiseFloor(), real_lo, real_hi);
+      }
+      display.setColor(UIColor::primary_txt);
+      display.fillRect(0, display.height() - 10, display.width(), 10);
+      display.setColor(UIColor::window_bkg);
+      display.setCursor(1, display.height() - 9);
+      display.print(lbuf);
 
       return sample_ms;
 #endif
