@@ -1714,22 +1714,31 @@ public:
         prev_y = y;
       }
 
-      // ^ — максимум окна, v — минимум. Символы есть в шрифте (стрелок
-      // 0x18/0x19 в кириллической таблице нет), поэтому так.
-      char lbuf[28];
+      // Нижняя полоса разбита на три ячейки: текущее, максимум и минимум окна.
+      // Разделители на 45 и 80 px: первая ячейка шире (в ней «NF:-105»), вторая
+      // и третья — по пять знаков. ^/v вместо стрелок: стрелок 0x18/0x19 в
+      // кириллической таблице шрифта нет, а эти символы есть.
+      char c1[12], c2[12], c3[12];
       if (noise_show_snr) {
-        snprintf(lbuf, sizeof(lbuf), "SNR:%.1f ^%.1f v%.1f",
-                 (double)radio_driver.getLastSNR(),
-                 real_hi / 10.0f, real_lo / 10.0f);
+        snprintf(c1, sizeof(c1), "S:%.1f", (double)radio_driver.getLastSNR());
+        snprintf(c2, sizeof(c2), "^%.1f", real_hi / 10.0f);
+        snprintf(c3, sizeof(c3), "v%.1f", real_lo / 10.0f);
       } else {
-        snprintf(lbuf, sizeof(lbuf), "NF:%d ^%d v%d",
-                 (int)radio_driver.getNoiseFloor(), real_hi, real_lo);
+        snprintf(c1, sizeof(c1), "NF:%d", (int)radio_driver.getNoiseFloor());
+        snprintf(c2, sizeof(c2), "^%d", real_hi);
+        snprintf(c3, sizeof(c3), "v%d", real_lo);
       }
       display.setColor(UIColor::primary_txt);
-      display.fillRect(0, display.height() - 10, display.width(), 10);
+      display.fillRect(0, foot_y, display.width(), 10);
       display.setColor(UIColor::window_bkg);
-      display.setCursor(1, display.height() - 9);
-      display.print(lbuf);
+      display.fillRect(45, foot_y, 1, 10);
+      display.fillRect(84, foot_y, 1, 10);
+      display.setCursor(1, foot_y + 1);
+      display.print(c1);
+      display.setCursor(47, foot_y + 1);
+      display.print(c2);
+      display.setCursor(86, foot_y + 1);
+      display.print(c3);
 
       return sample_ms;
 #endif
