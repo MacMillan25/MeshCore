@@ -1697,17 +1697,16 @@ public:
         prev_y = y;
       }
 
-      // Шкала ушла в нижнюю строку: там же текущее значение и диапазон окна.
-      // Одна полоса на всю ширину — и место под min/max, и видно, какая
-      // кривая выбрана (полоса всегда инвертирована).
+      // ^ — максимум окна, v — минимум. Символы есть в шрифте (стрелок
+      // 0x18/0x19 в кириллической таблице нет), поэтому так.
       char lbuf[28];
       if (noise_show_snr) {
-        snprintf(lbuf, sizeof(lbuf), "SNR:%.1f %.1f/%.1f",
+        snprintf(lbuf, sizeof(lbuf), "SNR:%.1f ^%.1f v%.1f",
                  (double)radio_driver.getLastSNR(),
-                 real_lo / 10.0f, real_hi / 10.0f);
+                 real_hi / 10.0f, real_lo / 10.0f);
       } else {
-        snprintf(lbuf, sizeof(lbuf), "NF:%d %d/%d",
-                 (int)radio_driver.getNoiseFloor(), real_lo, real_hi);
+        snprintf(lbuf, sizeof(lbuf), "NF:%d ^%d v%d",
+                 (int)radio_driver.getNoiseFloor(), real_hi, real_lo);
       }
       display.setColor(UIColor::primary_txt);
       display.fillRect(0, display.height() - 10, display.width(), 10);
