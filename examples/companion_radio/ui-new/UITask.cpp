@@ -3281,6 +3281,14 @@ void UITask::loop() {
     }
     _rxtx_last_pkt = pkts;
   }
+#ifdef DARKTEC
+  // Модель питания должна знать реальную мощность передатчика: от неё зависит
+  // ток передачи, а значит и ETA. Раньше это значение никто не подавал и модель
+  // всегда считала по 22 dBm.
+  if (_node_prefs) {
+    static_cast<DarktecBoard&>(board).setTxPowerDbm(_node_prefs->tx_power_dbm);
+  }
+#endif
 #if UI_HAS_JOYSTICK
   int ev = user_btn.check();
   if (ev == BUTTON_EVENT_CLICK) {

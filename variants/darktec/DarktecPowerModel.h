@@ -76,6 +76,9 @@ public:
   }
 
   void setTxPowerDbm(int8_t dbm) {
+    // Вызывается каждый цикл из UI, поэтому сбрасываем сглаживание только при
+    // реальной смене мощности — иначе ETA никогда не успокоится.
+    if (dbm == _tx_dbm) return;
     _tx_dbm = dbm;
     _eta_valid = false;
   }
