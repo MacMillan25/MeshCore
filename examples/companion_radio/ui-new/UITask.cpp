@@ -824,7 +824,7 @@ public:
       if (i == 1) return "Screen on";
       if (i == 2) return "Brightness";
       if (i == 3) return "Bar";
-      if (i == 4) return "Low bat";
+      if (i == 4) return "V-Cut";
       if (i == 5) return "Radio mod";
     }
 #endif
