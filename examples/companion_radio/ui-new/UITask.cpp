@@ -3522,19 +3522,19 @@ void UITask::renderSaver(DisplayDriver& display) {
   display.print(tb);
 
   display.setTextSize(1);
-  // Строка значков сразу под часами, без разделительной линии.
+  // Строка значков сразу под часами, без разделительной линии. Всё содержимое
+  // центрируется под часами: шрифт моноширинный (6 px на знак), поэтому ширину
+  // считаем целыми числами, без замеров.
   const int ty = y + 26;
+
   bool has_chg = false;
 #ifdef DARKTEC
   const uint8_t chg = board.getChargeIndicator();
-  if (chg == 1 || chg == 2) {
-    display.drawXbm(x + 1, ty, (chg == 1) ? charging_icon : plug_icon, 8, 8);
-    has_chg = true;
-  }
+  has_chg = (chg == 1 || chg == 2);
 #endif
-  // Значение в баре: шумовой пол или процент заряда — по пункту Bar.
-  // Без префикса «NF:»: вместе с конвертом и числом непрочитанных в 90 px
-  // полная подпись уже не помещалась — цифры упирались в иконку.
+
+  // Значение: шумовой пол или процент заряда — по пункту Bar. Без префикса
+  // «NF:»: вместе с конвертом и числом в 90 px полная подпись не влезала.
   char nb[14];
 #ifdef DARKTEC
   if (DarktecPrefs::get().bar_value == DarktecPrefsFormat::BAR_PERCENT) {
@@ -3544,25 +3544,49 @@ void UITask::renderSaver(DisplayDriver& display) {
   {
     snprintf(nb, sizeof(nb), "%d", (int)radio_driver.getNoiseFloor());
   }
-  const int label_x = has_chg ? (x + 11) : (x + 1);
-  display.setCursor(label_x, ty);
-  display.print(nb);
 
-  // Конверт и число непрочитанных — сразу за значением, через 3 px.
+  // Непрочитанных не бывает больше MAX_UNREAD_MSGS = 64, то есть две цифры.
   const int unread = getUnreadMsgCount();
+  char ub[4];
+  if (unread > 0) snprintf(ub, sizeof(ub), "%d", unread > 99 ? 99 : unread);
+
+  const int nb_w = (int)strlen(nb) * 6;
+  const int ub_w = (unread > 0) ? (int)strlen(ub) * 6 : 0;
+  // Центруем видимую часть. Слот RX/TX в ширину не закладываем: иначе пустой
+  // резерв сдвигал бы строку влево, когда активности нет. Буквы просто
+  // появляются справа от центральной группы — сама группа при этом не едет.
+  int wsum = nb_w;
+  if (has_chg) wsum += 8 + 2;
+  if (unread > 0) wsum += 3 + 8 + 1 + ub_w;
+
+  int px = x + (cw - wsum) / 2;
+  // Если RX/TX не влезает справа — прижимаем группу влево, чтобы буквы влезли.
+  if (_rxtx_mode != 0 && px + wsum + 14 > x + cw) px = x + cw - 14 - wsum;
+  if (px < x) px = x;
+
+  if (has_chg) {
+#ifdef DARKTEC
+    display.drawXbm(px, ty, (chg == 1) ? charging_icon : plug_icon, 8, 8);
+#endif
+    px += 10;
+  }
+  display.setCursor(px, ty);
+  display.print(nb);
+  px += nb_w;
+
   if (unread > 0) {
-    char ub[4];
-    snprintf(ub, sizeof(ub), "%d", unread > 99 ? 99 : unread);
-    const int env_x = label_x + display.getTextWidth(nb) + 3;
-    display.drawXbm(env_x, ty, envelope_icon, 8, 8);
-    display.setCursor(env_x + 9, ty);
+    px += 3;
+    display.drawXbm(px, ty, envelope_icon, 8, 8);
+    px += 9;
+    display.setCursor(px, ty);
     display.print(ub);
+    px += ub_w;
   }
 
   if (_rxtx_mode != 0) {
-    const char* lbl = (_rxtx_mode == 2) ? "TX" : "RX";
-    display.setCursor(x + cw - display.getTextWidth(lbl) - 1, ty);
-    display.print(lbl);
+    px += 2;
+    display.setCursor(px, ty);
+    display.print((_rxtx_mode == 2) ? "TX" : "RX");
   }
 }
 
