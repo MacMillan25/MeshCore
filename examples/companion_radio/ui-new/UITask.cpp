@@ -3524,14 +3524,17 @@ void UITask::renderSaver(DisplayDriver& display) {
   display.setTextSize(1);
   // Строка значков сразу под часами, без разделительной линии.
   const int ty = y + 26;
-  int cx = x + 1;
+  bool has_chg = false;
 #ifdef DARKTEC
   const uint8_t chg = board.getChargeIndicator();
   if (chg == 1 || chg == 2) {
-    display.drawXbm(cx, ty, (chg == 1) ? charging_icon : plug_icon, 8, 8);
+    display.drawXbm(x + 1, ty, (chg == 1) ? charging_icon : plug_icon, 8, 8);
+    has_chg = true;
   }
 #endif
   // Значение в баре: шумовой пол или процент заряда — по пункту Bar.
+  // Без префикса «NF:»: вместе с конвертом и числом непрочитанных в 90 px
+  // полная подпись уже не помещалась — цифры упирались в иконку.
   char nb[14];
 #ifdef DARKTEC
   if (DarktecPrefs::get().bar_value == DarktecPrefsFormat::BAR_PERCENT) {
@@ -3539,14 +3542,21 @@ void UITask::renderSaver(DisplayDriver& display) {
   } else
 #endif
   {
-    snprintf(nb, sizeof(nb), "NF:%d", (int)radio_driver.getNoiseFloor());
+    snprintf(nb, sizeof(nb), "%d", (int)radio_driver.getNoiseFloor());
   }
-  display.setCursor(x + 11, ty);
+  const int label_x = has_chg ? (x + 11) : (x + 1);
+  display.setCursor(label_x, ty);
   display.print(nb);
 
-  // Конверт — в своём слоте, чтобы длинное «NF:-105» до него не доставало.
-  if (getUnreadMsgCount() > 0) {
-    display.drawXbm(x + 58, ty, envelope_icon, 8, 8);
+  // Конверт и число непрочитанных — сразу за значением, через 3 px.
+  const int unread = getUnreadMsgCount();
+  if (unread > 0) {
+    char ub[4];
+    snprintf(ub, sizeof(ub), "%d", unread > 99 ? 99 : unread);
+    const int env_x = label_x + display.getTextWidth(nb) + 3;
+    display.drawXbm(env_x, ty, envelope_icon, 8, 8);
+    display.setCursor(env_x + 9, ty);
+    display.print(ub);
   }
 
   if (_rxtx_mode != 0) {
