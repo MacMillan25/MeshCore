@@ -533,9 +533,9 @@ class HomeScreen : public UIScreen {
     const int iconX = width - 24 - 5;
 #ifdef DARKTEC
     int left = iconX;
-    if (board.isUsbConnected())               left = iconX - 26;
+    if (_task->getRxTxMode() != 0)            left = iconX - 14;   // «RX»/«TX» = 12 px
+    else if (board.isUsbConnected())          left = iconX - 26;
     else if (board.getChargeIndicator() != 0) left = iconX - 9;
-    else if (_task->getRxTxMode() != 0)       left = iconX - 14;   // «RX»/«TX» = 12 px
 #else
     int left = board.isExternalPowered() ? (iconX - 9) : iconX;
 #endif
@@ -575,8 +575,11 @@ class HomeScreen : public UIScreen {
     // На DarkTec зарядка решается шиной CHRG (DarktecBoard::loop): напряжение
     // выше 4.5 В и ток выше 50 мА — молния, ток ниже — вилка.
 #ifdef DARKTEC
-    const bool usb_connected = board.isUsbConnected();
-    const uint8_t charge_state = board.getChargeIndicator();
+    // RX/TX показывается вместо заряда и USB: на время активности радио иконки
+    // уступают слот, потом возвращаются сами.
+    const uint8_t rxtx = _task->getRxTxMode();
+    const bool usb_connected = (rxtx == 0) && board.isUsbConnected();
+    const uint8_t charge_state = (rxtx != 0) ? 0 : board.getChargeIndicator();
 #else
     const bool usb_connected = false;
     const uint8_t charge_state = board.isExternalPowered()
@@ -738,7 +741,7 @@ public:
     switch (page) {
 #ifdef UI_DARKTEC_SETTINGS
       case SettingsPage::ROOT:    return 6;   // + [ Darktec ]
-      case SettingsPage::DARKTEC_PAGE: return 5;   // 4 параметра + "Back" внизу
+      case SettingsPage::DARKTEC_PAGE: return 6;   // 5 параметров + "Back" внизу
 #else
       case SettingsPage::ROOT:    return 5;
 #endif
@@ -812,14 +815,15 @@ public:
     else if (page == SettingsPage::DARKTEC_PAGE) {
       // Своя строка выхода внизу списка (как в официалке): i==5 — "Back",
       // пункты — i==0..4. Без стрелки: курсор ">" рядом с "<" сливается.
-      if (i == 4) return "Back";
+      if (i == 5) return "Back";
       if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
         return _darktec_note;
       }
       if (i == 0) return "Capacity";
       if (i == 1) return "Screen on";
       if (i == 2) return "Brightness";
-      if (i == 3) return "Radio mod";
+      if (i == 3) return "Bar";
+      if (i == 4) return "Radio mod";
     }
 #endif
     else if (i == 0) {
@@ -1008,6 +1012,10 @@ public:
                  bri_names[s.brightness < DarktecPrefsFormat::kBrightnessCount
                                ? s.brightness : DarktecPrefsFormat::BRI_HIGH]);
       } else if (i == 3) {
+        // Что показывать в мини-баре заставки: шумовой пол или заряд.
+        snprintf(raw, sizeof(raw), "%s",
+                 (s.bar_value == DarktecPrefsFormat::BAR_PERCENT) ? "%" : "NF");
+      } else if (i == 4) {
         // Порядок обязан совпадать с DarktecPrefsFormat::ModuleCode.
         static const char* mod_names[4] = { "E22-33S", "E22-30S", "RA62", "E22P" };
         snprintf(raw, sizeof(raw), "%s", mod_names[s.module < 4 ? s.module : 0]);
@@ -1208,9 +1216,14 @@ public:
         DisplayDriver* d = _task->getDisplay();
         if (d) d->setContrast(DarktecPrefsFormat::brightnessContrast(s.brightness));
       } else if (i == 3) {
+        // Мини-бар заставки: NF ↔ процент заряда.
+        const uint8_t n = DarktecPrefsFormat::kBarValueCount;
+        s.bar_value = (uint8_t)(fwd ? (s.bar_value + 1) % n
+                                    : (s.bar_value + n - 1) % n);
+      } else if (i == 4) {
         s.module = fwd ? (s.module + 1) % 4 : (s.module + 3) % 4;
         board.setRadioModule(s.module);   // RF-тракт и ETA — сразу
-      } else if (i == 4) {
+      } else if (i == 5) {
         // Back — возврат в корень настроек (тот же переход, что у общей
         // строки i==0 на других подстраницах).
         _settings_page = SettingsPage::ROOT;
@@ -3231,10 +3244,10 @@ void UITask::loop() {
     const uint32_t pkts = radio_driver.getPacketsRecv();
     if (the_mesh.isRadioTxBusy()) {
       _rxtx_mode = 2;
-      _rxtx_until = now + 150;
+      _rxtx_until = now + 300;
     } else if (pkts != _rxtx_last_pkt) {
       _rxtx_mode = 1;
-      _rxtx_until = now + 250;
+      _rxtx_until = now + 500;
     } else if (_rxtx_mode != 0 && (long)(now - _rxtx_until) >= 0) {
       _rxtx_mode = 0;
     }
@@ -3468,9 +3481,13 @@ void UITask::onPreviewTimeout() {
 // экрану по 1 px в секунду и отбивается от краёв.
 void UITask::renderSaver(DisplayDriver& display) {
   const int cw = 90;
-  const int ch = 37;
+  const int ch = 34;
   const int max_x = display.width() - cw;
   const int max_y = display.height() - ch;
+
+  // Контраст держим на минимуме каждый кадр: панель не должна «вспыхнуть»,
+  // если что-то в драйвере или настройках вернёт обычную яркость.
+  display.setContrast(1);
 
   if ((long)(millis() - _saver_next_move) >= 0) {
     _saver_next_move = millis() + 1000;
@@ -3497,30 +3514,31 @@ void UITask::renderSaver(DisplayDriver& display) {
   display.print(tb);
 
   display.setTextSize(1);
-  display.fillRect(x, y + 26, cw, 1);     // тонкая линия под часами
-
-  const int ty = y + 28;
+  // Строка значков сразу под часами, без разделительной линии.
+  const int ty = y + 26;
   int cx = x + 1;
 #ifdef DARKTEC
   const uint8_t chg = board.getChargeIndicator();
   if (chg == 1 || chg == 2) {
     display.drawXbm(cx, ty, (chg == 1) ? charging_icon : plug_icon, 8, 8);
-    cx += 10;
   }
 #endif
+  // Значение в баре: шумовой пол или процент заряда — по пункту Bar.
   char nb[14];
-  snprintf(nb, sizeof(nb), "NF:%d", (int)radio_driver.getNoiseFloor());
-  display.setCursor(cx, ty);
+#ifdef DARKTEC
+  if (DarktecPrefs::get().bar_value == DarktecPrefsFormat::BAR_PERCENT) {
+    snprintf(nb, sizeof(nb), "%u%%", (unsigned)board.getSocPercent());
+  } else
+#endif
+  {
+    snprintf(nb, sizeof(nb), "NF:%d", (int)radio_driver.getNoiseFloor());
+  }
+  display.setCursor(x + 11, ty);
   display.print(nb);
-  cx += display.getTextWidth(nb) + 4;
 
-  const int unread = getUnreadMsgCount();
-  if (unread > 0) {
-    display.drawXbm(cx, ty, envelope_icon, 8, 8);
-    cx += 9;
-    snprintf(nb, sizeof(nb), "%d", unread);
-    display.setCursor(cx, ty);
-    display.print(nb);
+  // Конверт — в своём слоте, чтобы длинное «NF:-105» до него не доставало.
+  if (getUnreadMsgCount() > 0) {
+    display.drawXbm(x + 58, ty, envelope_icon, 8, 8);
   }
 
   if (_rxtx_mode != 0) {

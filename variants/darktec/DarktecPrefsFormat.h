@@ -32,10 +32,18 @@ struct Settings {
   uint16_t capacity_mah;  // ёмкость пакета для режима UserPref, mAh (1000..10000)
   uint8_t module;         // ModuleCode
   uint8_t auto_off_idx;   // 0=15s, 1=30s, 2=1m, 3=5m, 4=1h
-  uint8_t noise_idx;      // 0=100ms, 1=250ms, 2=500ms, 3=1000ms
+  uint8_t noise_idx;      // 0=100ms, 1=250ms, 2=500ms, 3=1000ms (в памяти, не в файле)
   uint8_t capacity_mode;  // CapacityMode: 0=UserPref, 1=3000, 2=4000
   uint8_t brightness;     // BrightnessLevel: 0=Dim, 1=Normal, 2=Bright
+  uint8_t bar_value;      // BarValue: что показывать в мини-баре заставки
 };
+
+// Что показывать в мини-баре заставки «Always On».
+enum BarValue : uint8_t {
+  BAR_NF = 0,        // шумовой пол
+  BAR_PERCENT = 1,   // процент заряда
+};
+constexpr uint8_t kBarValueCount = 2;
 
 // Откуда брать ёмкость. В меню листаются три пункта; UserPref — значение,
 // которое задаёт прошивальщик (capacity_mah), 3000/4000 — фиксированные.
@@ -108,6 +116,7 @@ inline void sanitize(Settings& s) {
   if (s.noise_idx >= kNoiseCount) s.noise_idx = 0;
   if (s.capacity_mode >= kCapacityModeCount) s.capacity_mode = CAP_USER;
   if (s.brightness >= kBrightnessCount) s.brightness = BRI_HIGH;
+  if (s.bar_value >= kBarValueCount) s.bar_value = BAR_NF;
 }
 
 // CRC16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
@@ -123,7 +132,9 @@ inline uint16_t crc16(const uint8_t* data, uint32_t len) {
 }
 
 // "DRTC" + version + payload(capacity_le16, module, auto_off, noise,
-// capacity_mode, brightness, 6×0x00) + crc16(version+payload).
+// capacity_mode, brightness, bar_value, 5×0x00) + crc16(version+payload).
+// bar_value занял первый резервный байт: у старых v4-файлов он нулевой, и это
+// ровно BAR_NF, поэтому версию формата поднимать не пришлось.
 inline size_t serialize(const Settings& s, uint8_t* buf, size_t len) {
   if (len < kWireSize) return 0;
   Settings t = s;
@@ -137,7 +148,8 @@ inline size_t serialize(const Settings& s, uint8_t* buf, size_t len) {
   buf[9] = t.noise_idx;
   buf[10] = t.capacity_mode;
   buf[11] = t.brightness;
-  for (int i = 0; i < 6; i++) buf[12 + i] = 0x00;
+  buf[12] = t.bar_value;
+  for (int i = 0; i < 5; i++) buf[13 + i] = 0x00;
   const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
   buf[18] = (uint8_t)(crc & 0xFF);
   buf[19] = (uint8_t)(crc >> 8);
@@ -211,6 +223,7 @@ inline bool parseV4(const uint8_t* buf, size_t len, Settings& out) {
   s.noise_idx = buf[9];
   s.capacity_mode = buf[10];
   s.brightness = buf[11];
+  s.bar_value = buf[12];
   sanitize(s);
   out = s;
   return true;
