@@ -523,11 +523,20 @@ class HomeScreen : public UIScreen {
     int fillWidth = (batteryPercentage * (iconWidth - 4)) / 100;
     display.fillRect(iconX + 2, iconY + 2, fillWidth, iconHeight - 4);
 
-    // while charging, show a bolt (or a plug once full) just left of the battery,
-    // keeping the fill bar itself clean and uninterrupted
-    bool charging = board.isExternalPowered();
-    if (charging) {
-      const uint8_t* symbol = (batteryPercentage < 95) ? charging_icon : plug_icon;
+    // Индикатор заряда слева от батареи, полоска заливки при этом не рвётся.
+    // На DarkTec решает шина CHRG (см. DarktecBoard::loop): напряжение выше
+    // 4.5 В и ток выше 50 мА — идёт заряд (молния); напряжение есть, а ток
+    // ниже — заряд закончился, зарядник держит подпитку (вилка). Иначе пусто.
+#ifdef DARKTEC
+    const uint8_t charge_state = board.getChargeIndicator();
+    const bool has_charge_icon = (charge_state != 0);
+    const bool show_bolt = (charge_state == 1);
+#else
+    const bool has_charge_icon = board.isExternalPowered();
+    const bool show_bolt = (batteryPercentage < 95);
+#endif
+    if (has_charge_icon) {
+      const uint8_t* symbol = show_bolt ? charging_icon : plug_icon;
       display.setColor(UIColor::title_txt);
       display.drawXbm(iconX - 9, iconY + 1, symbol, 8, 8);
     }
@@ -537,7 +546,7 @@ class HomeScreen : public UIScreen {
 #ifdef PIN_BUZZER
     if (_task->isBuzzerQuiet()) {
       display.setColor(UIColor::warning_txt);
-      display.drawXbm(iconX - (charging ? 18 : 9), iconY + 1, muted_icon, 8, 8);
+      display.drawXbm(iconX - (has_charge_icon ? 18 : 9), iconY + 1, muted_icon, 8, 8);
     }
 #endif
   }

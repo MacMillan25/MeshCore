@@ -98,6 +98,12 @@ void darktec_radio_set_rf(uint8_t module_idx);
 #ifndef DARKTEC_CHARGE_DETECT_V
 #define DARKTEC_CHARGE_DETECT_V 4.5f
 #endif
+// Порог тока CHRG для индикатора на экране: выше — идёт заряд (молния), ниже —
+// заряд закончился и зарядник держит подпитку (вилка). Напряжение CHRG при этом
+// всё равно должно быть выше DARKTEC_CHARGE_DETECT_V, иначе иконки нет.
+#ifndef DARKTEC_CHARGE_ICON_MA
+#define DARKTEC_CHARGE_ICON_MA 50.0f
+#endif
 
 // Тик интегрирования тока. Не привязан к обновлению экрана: счётчик живёт в
 // loop() и считает с этой частотой независимо от того, что показывает дисплей.
@@ -166,6 +172,7 @@ protected:
   // «сколько залито за сессию» для страницы INA — в SOC и ETA НЕ участвует.
   float    _charge_mah = 0.0f;        // mAh poured into the pack this session
   bool     _charger_present = false;
+  uint8_t  _charge_icon = 0;   // 0 нет / 1 молния / 2 вилка
   uint32_t _charge_last_ms = 0;
   uint32_t _charge_session_ms = 0;
   uint32_t _full_hold_ms = 0;         // сколько ток заряда держится ниже порога
@@ -201,6 +208,9 @@ public:
   // zeroed when the next one appears.
   uint32_t getChargeMah() const { return (uint32_t)(_charge_mah + 0.5f); }
   bool isChargerPresent() const { return _charger_present; }
+  // Индикатор заряда у значка батареи: 0 — нет, 1 — молния (идёт заряд),
+  // 2 — вилка (заряд закончен, идёт подпитка). Считается по шине CHRG.
+  uint8_t getChargeIndicator() const { return _charge_icon; }
   uint32_t getChargeSessionSecs() const { return _charge_session_ms / 1000; }
 
   // --- Модель питания: SOC, остаток, ETA -------------------------------------

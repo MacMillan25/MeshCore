@@ -196,6 +196,17 @@ void DarktecBoard::loop() {
   }
   bool present = (chrg_v > DARKTEC_CHARGE_DETECT_V);
 
+  // Индикатор на экране: пока шина CHRG под напряжением, смотрим на её ток.
+  // Выше порога — идёт заряд (молния), ниже — заряд закончился, зарядник просто
+  // держит подпитку (вилка). Считаем здесь же: замер напряжения уже сделан.
+  if (present) {
+    float chrg_a = _ina.getCurrentAmps(DARKTEC_INA_CHARGE_CH);
+    float chrg_ma = isnan(chrg_a) ? 0.0f : chrg_a * 1000.0f;
+    _charge_icon = (chrg_ma > DARKTEC_CHARGE_ICON_MA) ? 1 : 2;
+  } else {
+    _charge_icon = 0;
+  }
+
   if (present && !_charger_present) {
     // Сессия заряда начинается заново. Состояние заряда пакета при этом
     // не сбрасывается: оно берётся из напряжения и от зарядника не зависит.
