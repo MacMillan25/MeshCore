@@ -521,6 +521,9 @@ class HomeScreen : public UIScreen {
     display.setTextSize(1);
     display.setCursor(x + 3, y + 1);
     display.print("USB");
+    // Возвращаем цвет отрисовки: дальше этим же цветом рисуются точки страниц
+    // и содержимое экрана, а «оконный» цвет сделал бы их чёрными по чёрному.
+    display.setColor(UIColor::title_txt);
   }
 
   // Левая граница зоны иконок в шапке. По ней обрезается имя ноды, чтобы
@@ -594,6 +597,10 @@ class HomeScreen : public UIScreen {
       display.drawXbm(left - 9, iconY + 1, muted_icon, 8, 8);
     }
 #endif
+
+    // Цвет отрисовки возвращаем всегда: дальше этим цветом рисуются точки
+    // страниц и содержимое экрана (часть экранов свой цвет не задаёт).
+    display.setColor(UIColor::title_txt);
   }
 
   CayenneLPP sensors_lpp;
@@ -1323,6 +1330,9 @@ public:
 
     // curr page indicator: считаем только видимые страницы, чтобы точки
     // соответствовали тому, что реально листается.
+    // Цвет задаём явно: renderBatteryIndicator мог оставить чёрный (плашка USB
+    // рисует буквы «оконным» цветом), и точки становились невидимыми.
+    display.setColor(UIColor::title_txt);
     int visible_count = 0;
     for (uint8_t i = 0; i < HomePage::Count; i++) {
       if (!pageHidden(i)) visible_count++;
