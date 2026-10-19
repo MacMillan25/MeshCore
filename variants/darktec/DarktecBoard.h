@@ -4,27 +4,29 @@
 #include <Arduino.h>
 #include <helpers/NRF52Board.h>
 
-#define P_LORA_NSS 13 //P1.13 45
-#define P_LORA_DIO_1 11 //P0.10 10
-#define P_LORA_RESET 10 //P0.09 9
-#define P_LORA_BUSY  16 //P0.29 29
-#define P_LORA_MISO  15 //P0.02 2
-#define P_LORA_SCLK  12 //P1.11 43
-#define P_LORA_MOSI  14 //P1.15 47
+// Пины по фактической распайке модуля LR2021 (20.10.2026). Номера слева —
+// Arduino-пины, справа — нога nRF и её номер из g_ADigitalPinMap (variant.cpp).
+#define P_LORA_SCLK  13 //P1.13 45
+#define P_LORA_NSS   12 //P1.11 43
+#define P_LORA_BUSY  14 //P1.15 47
+#define P_LORA_MOSI  15 //P0.02 2
+#define P_LORA_MISO  10 //P0.09 9
+#define P_LORA_RESET 16 //P0.29 29
+#define P_LORA_DIO_1 11 //P0.10 10 — IRQ модуля
 #define RADIO_POWER_EN 21 //P0.13 13
 
 /*
  * Радио: LR2021 (тестовая сборка на плате DarkTec).
  *
- * Распиновка пока копирует E22 — плата старая, модуль на проводках:
- *   SPI   NSS 13, SCLK 12, MOSI 14, MISO 15
- *   RESET 10, BUSY 16, линия прерываний 11 (DIO8 самого чипа)
+ *   SCK P1.13, NSS P1.11, MOSI P0.02, MISO P0.09
+ *   RESET P0.29, BUSY P1.15, IRQ P0.10
  *   RADIO_POWER_EN 21 — питание модуля
  *
- * DARKTEC_RADIO_CTRL_PIN (P0.17) — бывший пин 6 модуля E22. У 1-ваттного
- * модуля это, скорее всего, EN тракта: держим высоким постоянно. Когда
- * распайка станет известна, здесь появится своя логика — либо таблица
- * RF-ключа RadioLib, как у Meshnology W12 (setRfSwitchTable).
+ * Нога CE (sleep) модуля не подключена: подтянута к плюсу внутри модуля.
+ * Если радио не ответит по SPI — первым делом проверить её (притянуть к земле).
+ *
+ * DARKTEC_RADIO_CTRL_PIN (P0.17) — бывший пин 6 модуля E22, теперь никуда не
+ * идёт. Держим высоким, чтобы не висел в воздухе.
  */
 #define DARKTEC_RADIO_CTRL_PIN 2 // P0.17
 
