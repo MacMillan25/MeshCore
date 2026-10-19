@@ -3046,6 +3046,8 @@ void UITask::onControlDataRecv(const mesh::Packet* packet) {
 void UITask::onQueueSizeChanged(int msgcount) {
   _msgcount = msgcount;
   if (msgcount != 0) return;
+  // В заставке превью нет: экран не трогаем, иначе панель вспыхнет.
+  if (_saver_on) return;
   // Queue emptied (the app has taken the messages). A preview that has only just
   // come up stays until the MSG HOLD time after the message arrived, unless the
   // user leaves it first; see loop().
@@ -3070,12 +3072,16 @@ void UITask::onShowMessage(uint8_t path_len, const char* from_name, const char* 
 
   ((MsgPreviewScreen*)msg_preview)->addPreview(path_len, from_name, text, is_pm);
 
-  // Показываем входящее только с ПЕРВОЙ страницы и ровно на
-  // MESSAGE_PREVIEW_MILLIS. С других страниц сообщение просто копится в
+  // Показываем входящее только с ПЕРВОЙ страницы и ровно «Время показа» из
+  // настроек (Chat → Show Time). С других страниц сообщение просто копится в
   // непрочитанных: раньше оно мелькало на долю секунды при листании настроек.
-  if (on_first) {
+  // «Выкл» — не показываем вообще и не выходим из заставки.
+  const unsigned long hold = msgHoldMillis(_node_prefs);
+  if (hold == 0) {
+    // Экран не трогаем: сообщение осталось в непрочитанных.
+  } else if (on_first) {
     setCurrScreen(msg_preview);
-    ((MsgPreviewScreen*)msg_preview)->armAutoDismiss(MESSAGE_PREVIEW_MILLIS);
+    ((MsgPreviewScreen*)msg_preview)->armAutoDismiss(hold);
   } else if (on_clock) {
     int pm_mode = ((HomeScreen*)home)->getPmClockMode();
     if (pm_mode == 1 && is_pm) {
@@ -3085,7 +3091,7 @@ void UITask::onShowMessage(uint8_t path_len, const char* from_name, const char* 
     } else if (pm_mode == 0) {
       // All messages switch to msg_preview
       setCurrScreen(msg_preview);
-      ((MsgPreviewScreen*)msg_preview)->armAutoDismiss(MESSAGE_PREVIEW_MILLIS);
+      ((MsgPreviewScreen*)msg_preview)->armAutoDismiss(hold);
     }
     // pm_mode==1 && !is_pm: silently queued, no screen switch
   }
@@ -3159,8 +3165,10 @@ void UITask::userLedHandler() {
 void UITask::setCurrScreen(UIScreen* c) {
   if (c != msg_preview) _preview_close_at = 0;   // left the preview: nothing to close later
   // Любая смена экрана выводит из заставки: сообщение или действие пользователя
-  // должны быть видны в обычной яркости.
-  if (_saver_on) exitSaver();
+  // должны быть видны в обычной яркости. Повторный вызов с тем же экраном
+  // (например, gotoHomeScreen из обработчика очереди) заставку не трогает —
+  // иначе панель вспыхивала бы на любое событие.
+  if (_saver_on && c != curr) exitSaver();
   // Сообщаем экрану входящего, что его показали или что с него ушли:
   // на этом держится автоскрытие через MESSAGE_PREVIEW_MILLIS.
   if (msg_preview != NULL) {
