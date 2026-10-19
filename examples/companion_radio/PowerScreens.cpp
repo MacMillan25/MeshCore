@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <helpers/BatteryPack.h>
+#include <helpers/LowBattGuard.h>
 
 // Power off by voltage: the level the node still runs at reliably, under its
 // transmit load, is what matters, not the charge left. 3.40 V until bench
@@ -69,7 +70,18 @@ void drawPowerOff(DisplayDriver* d, bool low_battery) {
 }
 
 bool batteryFlat(uint16_t mv, bool external_power) {
-  if (external_power || mv < 2500) return false;
+  if (external_power) return false;
+
+  // Порог можно опустить на ходу (CLI `set darktec.lowbat`), чтобы гонять
+  // стенд на пониженном питании. Штатное правило «ниже 2.5 В — значит батареи
+  // нет» действует только при штатном пороге: если порог задан вручную,
+  // верим ему, иначе такая правка ничего бы не меняла.
+  if (LowBattGuard::overridden()) {
+    if (AUTO_SHUTDOWN_PERCENT > 0 && BatteryPack::getPercent(mv) <= AUTO_SHUTDOWN_PERCENT) return true;
+    return mv < LowBattGuard::millivolts();
+  }
+
+  if (mv < 2500) return false;
   if (AUTO_SHUTDOWN_PERCENT > 0 && BatteryPack::getPercent(mv) <= AUTO_SHUTDOWN_PERCENT) return true;
   return mv < AUTO_SHUTDOWN_MILLIVOLTS;
 }

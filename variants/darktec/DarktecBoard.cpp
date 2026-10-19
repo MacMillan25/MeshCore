@@ -5,6 +5,7 @@
 
 #include "DarktecBoard.h"
 #include "DarktecPrefs.h"
+#include <helpers/LowBattGuard.h>
 
 // Фасад для BatteryPack: позволяет ядровому оверлею получить SOC нашей модели,
 // не таща за собой объект платы (роль платы в main() отличается по примерам).
@@ -317,6 +318,30 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
   }
   if (memcmp(command, "get radio.module", 16) == 0) {
     sprintf(reply, "> %d", (int)DarktecPrefs::get().module);
+    return true;
+  }
+  // Порог отключения по низкому напряжению — только на текущую сессию, в файл
+  // не пишется: после перезагрузки защита снова штатная (3.40 В). Нужно для
+  // стенда, где нода питается от ЛБП ниже этого уровня.
+  if (memcmp(command, "set darktec.lowbat ", 20) == 0) {
+    const char* v = &command[20];
+    if (memcmp(v, "off", 3) == 0 || memcmp(v, "default", 7) == 0) {
+      LowBattGuard::clear();
+      strcpy(reply, "OK - lowbat default");
+      return true;
+    }
+    float volts = atof(v);
+    if (volts < 1.0f || volts > 4.0f) {
+      strcpy(reply, "Error: volts 1.0..4.0");
+      return true;
+    }
+    LowBattGuard::set((uint16_t)(volts * 1000.0f + 0.5f));
+    sprintf(reply, "OK - cutoff %u mV", (unsigned)LowBattGuard::millivolts());
+    return true;
+  }
+  if (memcmp(command, "get darktec.lowbat", 18) == 0) {
+    if (LowBattGuard::overridden()) sprintf(reply, "> %u mV", (unsigned)LowBattGuard::millivolts());
+    else strcpy(reply, "> default");
     return true;
   }
   if (memcmp(command, "set darktec.capacity ", 21) == 0) {
