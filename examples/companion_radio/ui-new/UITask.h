@@ -47,6 +47,20 @@ class UITask : public AbstractUITask {
   // изменилось — просим кадр, иначе на статичном экране иконка ждала бы его
   // следующей перерисовки.
   uint8_t _last_icon_state = 0xFF;
+
+  // --- Скринсейвер «Always On» ---------------------------------------------
+  // Вместо выключения экрана показываем часы с мини-баром; блок гуляет по
+  // экрану и отбивается от краёв, контраст всегда 1.
+  bool     _saver_on = false;
+  int16_t  _saver_x = 19, _saver_y = 13;
+  int8_t   _saver_dx = 1, _saver_dy = 1;
+  unsigned long _saver_next_move = 0;
+
+  // --- Активность радио для строки статуса ---------------------------------
+  // 0 нет, 1 RX, 2 TX. Горит последний, кто был: TX приоритетнее, пока идёт.
+  uint8_t  _rxtx_mode = 0;
+  unsigned long _rxtx_until = 0;
+  uint32_t _rxtx_last_pkt = 0;
   unsigned long _preview_shown_at = 0;   // millis() a message last came in
   unsigned long _preview_close_at = 0;   // deferred return home after the app read it; 0 = none
   NodePrefs* _node_prefs;
@@ -111,6 +125,16 @@ public:
     return home != NULL && home->isOnNoisePage() && _display != NULL && _display->isOn();
   }
   DisplayDriver* getDisplay() const { return _display; }
+  // Активность радио для строки статуса: 0 нет, 1 RX, 2 TX.
+  uint8_t getRxTxMode() const { return _rxtx_mode; }
+  bool isSaverActive() const { return _saver_on; }
+  // Заставка: вход/выход (выход возвращает яркость из настроек DarkTec).
+  void enterSaver();
+  void exitSaver();
+  void renderSaver(DisplayDriver& display);
+  // Таймер показа сообщения истёк: вернуться на главный и, если включён
+  // Always On, сразу снова уйти в заставку.
+  void onPreviewTimeout();
   bool isEinkDisplay() const { return _display != nullptr && _display->isEink(); }
   bool isUsbConnected() const { return _usb_connected; }
   uint32_t usbEventMs() const { return _usb_event_ms; }

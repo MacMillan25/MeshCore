@@ -270,7 +270,8 @@ public:
 
   void poll() override {
     if (millis() >= dismiss_after) {
-      _task->gotoHomeScreen();
+      // Таймер показа истёк: если включён Always On, сразу вернёмся в заставку.
+      _task->onPreviewTimeout();
     }
   }
 };
@@ -534,6 +535,7 @@ class HomeScreen : public UIScreen {
     int left = iconX;
     if (board.isUsbConnected())               left = iconX - 26;
     else if (board.getChargeIndicator() != 0) left = iconX - 9;
+    else if (_task->getRxTxMode() != 0)       left = iconX - 14;   // «RX»/«TX» = 12 px
 #else
     int left = board.isExternalPowered() ? (iconX - 9) : iconX;
 #endif
@@ -587,6 +589,16 @@ class HomeScreen : public UIScreen {
     } else if (has_charge_icon) {
       display.setColor(UIColor::title_txt);
       display.drawXbm(iconX - 9, iconY + 1, charge_state == 1 ? charging_icon : plug_icon, 8, 8);
+#ifdef DARKTEC
+    } else if (_task->getRxTxMode() != 0) {
+      // RX/TX — только если слот свободен: с молнией, вилкой или USB не
+      // рисуем, иначе значки наложатся. Горит последний, кто был.
+      const char* lbl = (_task->getRxTxMode() == 2) ? "TX" : "RX";
+      display.setColor(UIColor::title_txt);
+      display.setTextSize(1);
+      display.setCursor(iconX - 2 - display.getTextWidth(lbl), iconY + 1);
+      display.print(lbl);
+#endif
     }
 
     // Значок беззвучки — левее всех остальных иконок.
@@ -3133,6 +3145,9 @@ void UITask::userLedHandler() {
 
 void UITask::setCurrScreen(UIScreen* c) {
   if (c != msg_preview) _preview_close_at = 0;   // left the preview: nothing to close later
+  // Любая смена экрана выводит из заставки: сообщение или действие пользователя
+  // должны быть видны в обычной яркости.
+  if (_saver_on) exitSaver();
   // Сообщаем экрану входящего, что его показали или что с него ушли:
   // на этом держится автоскрытие через MESSAGE_PREVIEW_MILLIS.
   if (msg_preview != NULL) {
@@ -3206,6 +3221,24 @@ void UITask::loop() {
   if (_preview_close_at && (long)(millis() - _preview_close_at) >= 0) {
     _preview_close_at = 0;
     if (curr == msg_preview && _msgcount == 0) gotoHomeScreen();
+  }
+
+  // Активность радио для строки статуса: TX — пока идёт передача, RX — короткий
+  // импульс по счётчику принятых пакетов. Горит тот, кто был последним; TX
+  // перекрывает RX, пока передача не закончилась.
+  {
+    const unsigned long now = millis();
+    const uint32_t pkts = radio_driver.getPacketsRecv();
+    if (the_mesh.isRadioTxBusy()) {
+      _rxtx_mode = 2;
+      _rxtx_until = now + 150;
+    } else if (pkts != _rxtx_last_pkt) {
+      _rxtx_mode = 1;
+      _rxtx_until = now + 250;
+    } else if (_rxtx_mode != 0 && (long)(now - _rxtx_until) >= 0) {
+      _rxtx_mode = 0;
+    }
+    _rxtx_last_pkt = pkts;
   }
 #if UI_HAS_JOYSTICK
   int ev = user_btn.check();
@@ -3322,7 +3355,8 @@ void UITask::loop() {
   const uint8_t icon_state = board.isExternalPowered() ? 1 : 0;
 #else
   const uint8_t icon_state = (uint8_t)((board.isUsbConnected() ? 1 : 0) |
-                                       (board.getChargeIndicator() << 1));
+                                       (board.getChargeIndicator() << 1) |
+                                       (_rxtx_mode << 3));
 #endif
   if (icon_state != _last_icon_state) {
     _last_icon_state = icon_state;
@@ -3332,22 +3366,28 @@ void UITask::loop() {
   if (_display != NULL && _display->isOn()) {
     if (millis() >= _next_refresh && curr) {
       _display->startFrame();
-      int delay_millis = curr->render(*_display);
-      if (millis() < _alert_expiry) {  // render alert popup
-        _display->setTextSize(1);
-        int y = _display->height() / 3;
-        int p = _display->height() / 32;
-        _display->setColor(UIColor::popup_bkg);
-        _display->fillRect(p, y, _display->width() - p*2, y);
-        _display->setColor(UIColor::popup_txt);  // draw box border
-        _display->drawRect(p, y, _display->width() - p*2, y);
-        _display->drawTextCentered(_display->width() / 2, y + p*3, _alert);
-        _next_refresh = _alert_expiry;   // will need refresh when alert is dismissed
+      if (_saver_on) {
+        // Заставка: свой кадр, шаг раз в секунду.
+        renderSaver(*_display);
+        _next_refresh = millis() + 1000;
       } else {
-        _next_refresh = millis() + delay_millis;
+        int delay_millis = curr->render(*_display);
+        if (millis() < _alert_expiry) {  // render alert popup
+          _display->setTextSize(1);
+          int y = _display->height() / 3;
+          int p = _display->height() / 32;
+          _display->setColor(UIColor::popup_bkg);
+          _display->fillRect(p, y, _display->width() - p*2, y);
+          _display->setColor(UIColor::popup_txt);  // draw box border
+          _display->drawRect(p, y, _display->width() - p*2, y);
+          _display->drawTextCentered(_display->width() / 2, y + p*3, _alert);
+          _next_refresh = _alert_expiry;   // will need refresh when alert is dismissed
+        } else {
+          _next_refresh = millis() + delay_millis;
+        }
+        if (_display->isEink() && home)
+          _display->setFullRefreshSuppressed(((HomeScreen*)home)->isOnClockPage());
       }
-      if (_display->isEink() && home)
-        _display->setFullRefreshSuppressed(((HomeScreen*)home)->isOnClockPage());
       _display->endFrame();
     }
 #if AUTO_OFF_MILLIS > 0
@@ -3365,11 +3405,8 @@ void UITask::loop() {
       _auto_off = millis() + autoOffMillis();
     }
     if (_clock_dim_mode == 1) {
-      // OFF: no dim while on CLOCK page
-      if (home && ((HomeScreen*)home)->isOnClockPage())
-        _auto_off = millis() + autoOffMillis();
-      if (millis() > _auto_off) { _saveElapsedToPrefs(); _display->turnOff();
-    board.setDisplayOn(false); }
+      // Always On: экран не гасим, а уходим в заставку «часы + мини-бар».
+      if (!_saver_on && millis() > _auto_off) enterSaver();
     } else {
       // ON: normal auto-off
       if (millis() > _auto_off) { _saveElapsedToPrefs(); _display->turnOff();
@@ -3393,8 +3430,114 @@ void UITask::loop() {
   }
 }
 
+void UITask::enterSaver() {
+  if (_saver_on || _display == NULL) return;
+  _saver_on = true;
+  // Контраст минимум: заставка не должна жечь панель и светить ночью.
+  _display->setContrast(1);
+  const int max_x = _display->width() - 90;
+  const int max_y = _display->height() - 37;
+  _saver_x = (max_x > 0) ? max_x / 2 : 0;
+  _saver_y = (max_y > 0) ? max_y / 2 : 0;
+  _saver_dx = 1; _saver_dy = 1;
+  _saver_next_move = millis() + 1000;
+  _next_refresh = 0;
+}
+
+void UITask::exitSaver() {
+  if (!_saver_on) return;
+  _saver_on = false;
+#ifdef DARKTEC
+  // Обратно — та яркость, что выбрана в подменю [ Darktec ].
+  if (_display != NULL) {
+    _display->setContrast(DarktecPrefsFormat::brightnessContrast(DarktecPrefs::get().brightness));
+  }
+#endif
+  _auto_off = millis() + autoOffMillis();
+  _next_refresh = 0;
+}
+
+void UITask::onPreviewTimeout() {
+  gotoHomeScreen();
+  // Сообщение отвисело ровно своё время — возвращаемся в заставку сразу,
+  // не дожидаясь второго таймера.
+  if (_clock_dim_mode == 1) _auto_off = millis();
+}
+
+// Кадр заставки: часы 90x24, линия под ними и строка значков. Блок гуляет по
+// экрану по 1 px в секунду и отбивается от краёв.
+void UITask::renderSaver(DisplayDriver& display) {
+  const int cw = 90;
+  const int ch = 37;
+  const int max_x = display.width() - cw;
+  const int max_y = display.height() - ch;
+
+  if ((long)(millis() - _saver_next_move) >= 0) {
+    _saver_next_move = millis() + 1000;
+    _saver_x += _saver_dx;
+    _saver_y += _saver_dy;
+    if (_saver_x <= 0)     { _saver_x = 0;     _saver_dx = 1; }
+    if (_saver_x >= max_x) { _saver_x = max_x; _saver_dx = -1; }
+    if (_saver_y <= 0)     { _saver_y = 0;     _saver_dy = 1; }
+    if (_saver_y >= max_y) { _saver_y = max_y; _saver_dy = -1; }
+  }
+  const int x = _saver_x;
+  const int y = _saver_y;
+
+  time_t now = (time_t)rtc_clock.getCurrentTime();
+  if (_node_prefs && _node_prefs->tz_offset != 0) now += (time_t)_node_prefs->tz_offset * 3600;
+  struct tm ti;
+  localtime_r(&now, &ti);
+  char tb[6];
+  strftime(tb, sizeof(tb), "%H:%M", &ti);
+
+  display.setColor(UIColor::primary_txt);
+  display.setTextSize(3);
+  display.setCursor(x, y);
+  display.print(tb);
+
+  display.setTextSize(1);
+  display.fillRect(x, y + 26, cw, 1);     // тонкая линия под часами
+
+  const int ty = y + 28;
+  int cx = x + 1;
+#ifdef DARKTEC
+  const uint8_t chg = board.getChargeIndicator();
+  if (chg == 1 || chg == 2) {
+    display.drawXbm(cx, ty, (chg == 1) ? charging_icon : plug_icon, 8, 8);
+    cx += 10;
+  }
+#endif
+  char nb[14];
+  snprintf(nb, sizeof(nb), "NF:%d", (int)radio_driver.getNoiseFloor());
+  display.setCursor(cx, ty);
+  display.print(nb);
+  cx += display.getTextWidth(nb) + 4;
+
+  const int unread = getUnreadMsgCount();
+  if (unread > 0) {
+    display.drawXbm(cx, ty, envelope_icon, 8, 8);
+    cx += 9;
+    snprintf(nb, sizeof(nb), "%d", unread);
+    display.setCursor(cx, ty);
+    display.print(nb);
+  }
+
+  if (_rxtx_mode != 0) {
+    const char* lbl = (_rxtx_mode == 2) ? "TX" : "RX";
+    display.setCursor(x + cw - display.getTextWidth(lbl) - 1, ty);
+    display.print(lbl);
+  }
+}
+
 char UITask::checkDisplayOn(char c) {
   if (_display != NULL) {
+    if (_saver_on) {
+      // Первое нажатие только будит: выходим из заставки на последний экран,
+      // само действие не выполняем.
+      exitSaver();
+      return 0;
+    }
     if (!_display->isOn()) {
       _display->turnOn();
     board.setDisplayOn(true);   // turn display on and consume event
@@ -3407,6 +3550,8 @@ char UITask::checkDisplayOn(char c) {
 }
 
 char UITask::handleLongPress(char c) {
+  // Из заставки первое нажатие только будит: действие не выполняем.
+  if (_saver_on) { exitSaver(); return 0; }
   // Rescue mode kills the companion protocol, and the entry window is exactly
   // when a user is most likely to be prodding a freshly powered node. Make the
   // same gesture the way back out, and say on screen that it happened -
@@ -3426,13 +3571,12 @@ char UITask::handleLongPress(char c) {
 
 char UITask::handleDoubleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: double-click triggered");
-  checkDisplayOn(c);
-  return c;
+  return checkDisplayOn(c);   // 0 — только что вышли из заставки/разбудили экран
 }
 
 char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
-  checkDisplayOn(c);
+  if (checkDisplayOn(c) == 0) return 0;
 #if UI_NOISE_PAGE == 1 && defined(UI_DARKTEC_SETTINGS)
   // На экране шума тройное листает скорость дорожки, а не глушит буззер:
   // то же значение, что и пункт NF Speed в подменю [ Darktec ].
