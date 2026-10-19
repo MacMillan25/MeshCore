@@ -121,6 +121,10 @@ void DarktecBoard::begin() {
     g_power_board = this;
     DarktecPrefs::begin();
     const DarktecPrefsFormat::Settings& p = DarktecPrefs::get();
+    // Порог отключения по низкому напряжению применяем сразу: проверка батареи
+    // в main() идёт уже после board.begin(), поэтому стендовое значение из
+    // prefs успевает подхватиться и переживает перезагрузку.
+    LowBattGuard::set((uint16_t)p.low_batt_mv100 * 100);
     // Ёмкость — с учётом режима UserPref/3000/4000: от неё масштабируются
     // остаток и ETA в модели.
     _pm.setCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(p));
@@ -326,8 +330,10 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
   if (memcmp(command, "set darktec.lowbat ", 20) == 0) {
     const char* v = &command[20];
     if (memcmp(v, "off", 3) == 0 || memcmp(v, "default", 7) == 0) {
+      s.low_batt_mv100 = 0;
+      DarktecPrefs::save(s);
       LowBattGuard::clear();
-      strcpy(reply, "OK - lowbat default");
+      strcpy(reply, "OK - lowbat default 3400 mV (saved)");
       return true;
     }
     float volts = atof(v);
@@ -335,13 +341,15 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
       strcpy(reply, "Error: volts 1.0..4.0");
       return true;
     }
-    LowBattGuard::set((uint16_t)(volts * 1000.0f + 0.5f));
-    sprintf(reply, "OK - cutoff %u mV", (unsigned)LowBattGuard::millivolts());
+    s.low_batt_mv100 = (uint8_t)(volts * 10.0f + 0.5f);
+    DarktecPrefs::save(s);
+    LowBattGuard::set((uint16_t)s.low_batt_mv100 * 100);
+    sprintf(reply, "OK - cutoff %u mV (saved)", (unsigned)LowBattGuard::millivolts());
     return true;
   }
   if (memcmp(command, "get darktec.lowbat", 18) == 0) {
     if (LowBattGuard::overridden()) sprintf(reply, "> %u mV", (unsigned)LowBattGuard::millivolts());
-    else strcpy(reply, "> default");
+    else strcpy(reply, "> default 3400 mV");
     return true;
   }
   if (memcmp(command, "set darktec.capacity ", 21) == 0) {

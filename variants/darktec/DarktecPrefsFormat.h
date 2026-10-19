@@ -36,6 +36,7 @@ struct Settings {
   uint8_t capacity_mode;  // CapacityMode: 0=UserPref, 1=3000, 2=4000
   uint8_t brightness;     // BrightnessLevel: 0=Dim, 1=Normal, 2=Bright
   uint8_t bar_value;      // BarValue: что показывать в мини-баре заставки
+  uint8_t low_batt_mv100; // порог отключения по низкому напряжению, в 100 мВ; 0 = штатный 3.40 В
 };
 
 // Что показывать в мини-баре заставки «Always On».
@@ -117,6 +118,7 @@ inline void sanitize(Settings& s) {
   if (s.capacity_mode >= kCapacityModeCount) s.capacity_mode = CAP_USER;
   if (s.brightness >= kBrightnessCount) s.brightness = BRI_HIGH;
   if (s.bar_value >= kBarValueCount) s.bar_value = BAR_NF;
+  if (s.low_batt_mv100 > 40) s.low_batt_mv100 = 0;   // 0..4.0 В; больше — мусор
 }
 
 // CRC16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
@@ -149,7 +151,8 @@ inline size_t serialize(const Settings& s, uint8_t* buf, size_t len) {
   buf[10] = t.capacity_mode;
   buf[11] = t.brightness;
   buf[12] = t.bar_value;
-  for (int i = 0; i < 5; i++) buf[13 + i] = 0x00;
+  buf[13] = t.low_batt_mv100;
+  for (int i = 0; i < 4; i++) buf[14 + i] = 0x00;
   const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
   buf[18] = (uint8_t)(crc & 0xFF);
   buf[19] = (uint8_t)(crc >> 8);
@@ -224,6 +227,7 @@ inline bool parseV4(const uint8_t* buf, size_t len, Settings& out) {
   s.capacity_mode = buf[10];
   s.brightness = buf[11];
   s.bar_value = buf[12];
+  s.low_batt_mv100 = buf[13];
   sanitize(s);
   out = s;
   return true;
