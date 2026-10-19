@@ -2489,6 +2489,19 @@ public:
       return true;
     }
 #endif
+#ifdef UI_DARKTEC_SETTINGS
+    // Долгое нажатие на экране часов включает/выключает заставку — та же
+    // настройка, что «Экран → Часы всегда» (ui_clock_dim_mode).
+    if (c == KEY_ENTER && _page == HomePage::CLOCK) {
+      _task->setClockDimMode(_task->getClockDimMode() ? 0 : 1);
+      the_mesh.savePrefs();
+      _task->showAlert(_task->getClockDimMode()
+                           ? _TR("Saver: ON", "Заставка: ВКЛ")
+                           : _TR("Saver: OFF", "Заставка: ВЫКЛ"),
+                       1500);
+      return true;
+    }
+#endif
 #ifndef WITH_WIFI_SWITCHING
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
@@ -3272,10 +3285,10 @@ void UITask::loop() {
     const uint32_t pkts = radio_driver.getPacketsRecv();
     if (the_mesh.isRadioTxBusy()) {
       _rxtx_mode = 2;
-      _rxtx_until = now + 300;
+      _rxtx_until = now + 450;
     } else if (pkts != _rxtx_last_pkt) {
       _rxtx_mode = 1;
-      _rxtx_until = now + 500;
+      _rxtx_until = now + 750;
     } else if (_rxtx_mode != 0 && (long)(now - _rxtx_until) >= 0) {
       _rxtx_mode = 0;
     }
