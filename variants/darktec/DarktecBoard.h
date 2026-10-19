@@ -211,6 +211,9 @@ public:
   // Индикатор заряда у значка батареи: 0 — нет, 1 — молния (идёт заряд),
   // 2 — вилка (заряд закончен, идёт подпитка). Считается по шине CHRG.
   uint8_t getChargeIndicator() const { return _charge_icon; }
+  // Кабель в USB разъёме самой ноды (VBUS) — прошивка/консоль. Это не зарядка
+  // пакета: у платы отдельный вход зарядника.
+  bool isUsbConnected() { return NRF52Board::isExternalPowered(); }
   uint32_t getChargeSessionSecs() const { return _charge_session_ms / 1000; }
 
   // --- Модель питания: SOC, остаток, ETA -------------------------------------

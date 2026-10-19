@@ -503,6 +503,47 @@ class HomeScreen : public UIScreen {
 #endif
 
 
+  // Белая плашка «USB» со скруглёнными углами вместо молнии: 24x10, буквы
+  // чёрные. Скругления в драйвере нет, поэтому углы срезаются пикселями —
+  // лесенкой в 2 px, как в макете (mockups/screens.py, draw_usb_badge).
+  void drawUsbBadge(DisplayDriver& display, int x, int y) {
+    display.setColor(UIColor::title_txt);
+    display.fillRect(x, y, 24, 10);
+    display.setColor(UIColor::window_bkg);
+    for (int i = 0; i < 2; i++) {
+      for (int k = 0; k < 2 - i; k++) {
+        display.fillRect(x + k, y + i, 1, 1);
+        display.fillRect(x + 23 - k, y + i, 1, 1);
+        display.fillRect(x + k, y + 9 - i, 1, 1);
+        display.fillRect(x + 23 - k, y + 9 - i, 1, 1);
+      }
+    }
+    display.setTextSize(1);
+    display.setCursor(x + 3, y + 1);
+    display.print("USB");
+  }
+
+  // Левая граница зоны иконок в шапке. По ней обрезается имя ноды, чтобы
+  // длинное имя не наезжало ни на молнию, ни на вилку, ни на плашку USB.
+  int headerIconsLeft(int width) const {
+    const int iconX = width - 24 - 5;
+#ifdef DARKTEC
+    int left = iconX;
+    if (board.isUsbConnected())               left = iconX - 26;
+    else if (board.getChargeIndicator() != 0) left = iconX - 9;
+#else
+    int left = board.isExternalPowered() ? (iconX - 9) : iconX;
+#endif
+#ifdef PIN_BUZZER
+    if (_task->isBuzzerQuiet()) {
+      // Значок беззвучки всегда левее индикатора заряда.
+      int muted = (left < iconX) ? (left - 9) : (iconX - 9);
+      if (muted < left) left = muted;
+    }
+#endif
+    return left;
+  }
+
   void renderBatteryIndicator(DisplayDriver& display, uint16_t batteryMilliVolts) {
     int batteryPercentage = (int)BatteryPack::getPercent(batteryMilliVolts);
 
@@ -523,30 +564,34 @@ class HomeScreen : public UIScreen {
     int fillWidth = (batteryPercentage * (iconWidth - 4)) / 100;
     display.fillRect(iconX + 2, iconY + 2, fillWidth, iconHeight - 4);
 
-    // Индикатор заряда слева от батареи, полоска заливки при этом не рвётся.
-    // На DarkTec решает шина CHRG (см. DarktecBoard::loop): напряжение выше
-    // 4.5 В и ток выше 50 мА — идёт заряд (молния); напряжение есть, а ток
-    // ниже — заряд закончился, зарядник держит подпитку (вилка). Иначе пусто.
+    // Иконки слева от батареи, полоска заливки при этом не рвётся.
+    // Приоритет: подключённый USB важнее зарядки — если висят оба провода,
+    // рисуется только плашка USB, иначе иконки накладывались бы друг на друга.
+    // На DarkTec зарядка решается шиной CHRG (DarktecBoard::loop): напряжение
+    // выше 4.5 В и ток выше 50 мА — молния, ток ниже — вилка.
 #ifdef DARKTEC
+    const bool usb_connected = board.isUsbConnected();
     const uint8_t charge_state = board.getChargeIndicator();
-    const bool has_charge_icon = (charge_state != 0);
-    const bool show_bolt = (charge_state == 1);
 #else
-    const bool has_charge_icon = board.isExternalPowered();
-    const bool show_bolt = (batteryPercentage < 95);
+    const bool usb_connected = false;
+    const uint8_t charge_state = board.isExternalPowered()
+                                     ? (batteryPercentage < 95 ? 1 : 2) : 0;
 #endif
-    if (has_charge_icon) {
-      const uint8_t* symbol = show_bolt ? charging_icon : plug_icon;
+    const bool has_charge_icon = (!usb_connected && charge_state != 0);
+
+    if (usb_connected) {
+      drawUsbBadge(display, iconX - 26, iconY);
+    } else if (has_charge_icon) {
       display.setColor(UIColor::title_txt);
-      display.drawXbm(iconX - 9, iconY + 1, symbol, 8, 8);
+      display.drawXbm(iconX - 9, iconY + 1, charge_state == 1 ? charging_icon : plug_icon, 8, 8);
     }
 
-    // show muted icon if buzzer is muted (shifted further left when the charging
-    // icon already occupies the slot immediately left of the battery)
+    // Значок беззвучки — левее всех остальных иконок.
 #ifdef PIN_BUZZER
     if (_task->isBuzzerQuiet()) {
       display.setColor(UIColor::warning_txt);
-      display.drawXbm(iconX - (has_charge_icon ? 18 : 9), iconY + 1, muted_icon, 8, 8);
+      const int left = headerIconsLeft(display.width());
+      display.drawXbm(left - 9, iconY + 1, muted_icon, 8, 8);
     }
 #endif
   }
@@ -1261,8 +1306,10 @@ public:
     // node name
     display.setTextSize(hdr_size);
     display.setColor(UIColor::primary_txt);
-    display.setCursor(0, 2);
-    display.print(_node_prefs->node_name);
+    // Имя обрезается по левой границе зоны иконок: длинное имя не должно
+    // наезжать ни на молнию/вилку, ни на плашку USB.
+    const int name_max = headerIconsLeft(display.width()) - 2;
+    display.drawTextEllipsized(0, 2, name_max, _node_prefs->node_name);
 
     char note_buf[32];
     if (uiHeaderNote((int)_page, note_buf, sizeof(note_buf))) {
