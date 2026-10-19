@@ -90,8 +90,9 @@ static const uint16_t MEASURED_MV[] = { 4200, 3700, 3000 };
 static const int MEASURED_MV_COUNT = 3;
 
 // E22-900M33S — замерено
-static const uint16_t E22_900M33S_IDLE_OFF_MA[] = { 26, 37, 50 };
-static const uint16_t E22_900M33S_IDLE_ON_MA[]  = { 32, 43, 58 };
+static const uint16_t E22_900M33S_IDLE_OFF_MA[] = { 26, 33, 44 };
+static const uint16_t E22_900M33S_IDLE_SAVER_MA[] = { 28, 36, 48 };
+static const uint16_t E22_900M33S_IDLE_ON_MA[]  = { 31, 40, 52 };
 // строки: мощности [-9, 0, 5, 10, 22]
 static const uint16_t E22_900M33S_TX_MA[][5] = {
   { 717, 1103, 1236, 1258, 1479 },   // 4200 мВ
@@ -100,8 +101,9 @@ static const uint16_t E22_900M33S_TX_MA[][5] = {
 };
 
 // E22-900M30S — РАСЧЁТ: токи TX = половина от 33S, экран как у 33S
-static const uint16_t E22_900M30S_IDLE_OFF_MA[] = { 26, 37, 50 };
-static const uint16_t E22_900M30S_IDLE_ON_MA[]  = { 32, 43, 58 };
+static const uint16_t E22_900M30S_IDLE_OFF_MA[] = { 26, 33, 44 };
+static const uint16_t E22_900M30S_IDLE_SAVER_MA[] = { 28, 36, 48 };
+static const uint16_t E22_900M30S_IDLE_ON_MA[]  = { 31, 40, 52 };
 // строки: мощности [-9, 0, 5, 10, 22]
 static const uint16_t E22_900M30S_TX_MA[][5] = {
   { 358, 552, 618, 629, 740 },   // 4200 мВ
@@ -110,8 +112,9 @@ static const uint16_t E22_900M30S_TX_MA[][5] = {
 };
 
 // HT-RA62 — РАСЧЁТ: экран как у 33S, TX линейно по dBm (28..130 мА)
-static const uint16_t HT_RA62_IDLE_OFF_MA[] = { 26, 37, 50 };
-static const uint16_t HT_RA62_IDLE_ON_MA[]  = { 32, 43, 58 };
+static const uint16_t HT_RA62_IDLE_OFF_MA[] = { 26, 33, 44 };
+static const uint16_t HT_RA62_IDLE_SAVER_MA[] = { 28, 36, 48 };
+static const uint16_t HT_RA62_IDLE_ON_MA[]  = { 31, 40, 52 };
 // строки: мощности [-9, 0, 5, 10, 22]
 static const uint16_t HT_RA62_TX_MA[][5] = {
   { 28, 58, 74, 90, 130 },   // 4200 мВ
@@ -121,6 +124,7 @@ static const uint16_t HT_RA62_TX_MA[][5] = {
 
 // E22P-868M30S — замерено
 static const uint16_t E22P_868M30S_IDLE_OFF_MA[] = { 44, 54, 65 };
+static const uint16_t E22P_868M30S_IDLE_SAVER_MA[] = { 47, 56, 68 };
 static const uint16_t E22P_868M30S_IDLE_ON_MA[]  = { 50, 59, 71 };
 // строки: мощности [-9, 0, 5, 10, 22]
 static const uint16_t E22P_868M30S_TX_MA[][5] = {

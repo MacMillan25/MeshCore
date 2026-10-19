@@ -64,25 +64,28 @@ V_MEASURED = (4200, 3700, 3000)
 P_MEASURED = (-9, 0, 5, 10, 22)
 
 # Ключи режима
-IDLE_OFF, IDLE_ON = "idle_off", "idle_on"
+IDLE_OFF, IDLE_SAVER, IDLE_ON = "idle_off", "idle_saver", "idle_on"
 TX_KEY = {p: f"tx_{p}" for p in P_MEASURED}
 
 # Замеры: модуль -> режим -> (ток при 4.2, 3.7, 3.0 В), мА
 TABLES = {
-    # E22-900M33S — измерено 16.10.2026
+    # E22-900M33S — измерено 19.10.2026 (покой, экран, заставка, TX)
     "E22_900M33S": {
-        IDLE_OFF: (25.7, 37.0, 50.0),
-        IDLE_ON:  (32.0, 43.0, 58.0),
+        IDLE_OFF:   (26.0, 33.0, 44.0),
+        IDLE_SAVER: (28.0, 36.0, 48.0),   # заставка: контраст 1, кадр раз в секунду
+        IDLE_ON:    (31.0, 40.0, 52.0),
         TX_KEY[22]: (1479.0, 1730.0, 2795.0),
         TX_KEY[10]: (1258.0, 1473.0, 2326.0),
         TX_KEY[5]:  (1236.0, 1394.0, 1928.0),
         TX_KEY[0]:  (1103.0, 1228.0, 1753.0),
         TX_KEY[-9]: (717.0, 829.0, 1088.0),
     },
-    # E22P-868M30S — измерено 16.10.2026
+    # E22P-868M30S — измерено 16.10.2026 (заставка оценена: покой + половина
+    # разницы «выключен/включен», как у 33S)
     "E22P_868M30S": {
-        IDLE_OFF: (44.0, 54.0, 65.0),
-        IDLE_ON:  (50.0, 59.0, 71.0),
+        IDLE_OFF:   (44.0, 54.0, 65.0),
+        IDLE_SAVER: (47.0, 56.0, 68.0),
+        IDLE_ON:    (50.0, 59.0, 71.0),
         TX_KEY[22]: (1023.0, 1383.0, 1515.0),
         TX_KEY[10]: (990.0, 1124.0, 1493.0),
         TX_KEY[5]:  (479.0, 590.0, 686.0),
@@ -104,8 +107,9 @@ RA62_TX_LOW_MA = 28.0     # ниже 0 dBm усилитель не работа�
 RA62_TX_HIGH_MA = 130.0   # на 22 dBm
 _lo_p, _hi_p = -9, 22
 TABLES["HT_RA62"] = {
-    IDLE_OFF: TABLES["E22_900M33S"][IDLE_OFF],
-    IDLE_ON:  TABLES["E22_900M33S"][IDLE_ON],
+    IDLE_OFF:   TABLES["E22_900M33S"][IDLE_OFF],
+    IDLE_SAVER: TABLES["E22_900M33S"][IDLE_SAVER],
+    IDLE_ON:    TABLES["E22_900M33S"][IDLE_ON],
 }
 for _p in P_MEASURED:
     _t = (_p - _lo_p) / (_hi_p - _lo_p)
@@ -288,6 +292,8 @@ def main():
         # литерал в brace-init — это narrowing conversion и ошибка сборки.
         L.append(f"static const uint16_t {mod}_IDLE_OFF_MA[] = {{ "
                  + ", ".join(str(int(round(x))) for x in tab[IDLE_OFF]) + " };")
+        L.append(f"static const uint16_t {mod}_IDLE_SAVER_MA[] = {{ "
+                 + ", ".join(str(int(round(x))) for x in tab[IDLE_SAVER]) + " };")
         L.append(f"static const uint16_t {mod}_IDLE_ON_MA[]  = {{ "
                  + ", ".join(str(int(round(x))) for x in tab[IDLE_ON]) + " };")
         L.append(f"// строки: мощности {list(P_MEASURED)}")

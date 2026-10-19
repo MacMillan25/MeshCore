@@ -80,8 +80,10 @@ public:
     _eta_valid = false;
   }
 
-  // Экран горит — другой ток покоя, разница 6-13 мА постоянных.
-  void setDisplayOn(bool on) { _display_on = on; }
+  // Состояние экрана: три разных тока покоя. 0 — выключен, 1 — заставка
+  // (контраст 1, кадр раз в секунду), 2 — обычный экран.
+  void setDisplayState(uint8_t state) { _display_state = (state > 2) ? 2 : state; }
+  void setDisplayOn(bool on) { _display_state = on ? 2 : 0; }
 
   uint32_t getCapacityMah() const { return (uint32_t)(_capacity_mah + 0.5f); }
 
@@ -303,7 +305,7 @@ private:
   uint16_t _ocv_mv = 0;
   uint8_t  _module = MODULE_E22_900M33S;
   int8_t   _tx_dbm = 22;
-  bool     _display_on = false;
+  uint8_t  _display_state = 0;   // 0 выкл, 1 заставка, 2 экран
   uint32_t _last_active_ms = 0;
 
   float    _eta_smooth = 0.0f;
@@ -432,21 +434,23 @@ private:
   }
 
   float idleCurrentAt(uint16_t mv) const {
-    const uint16_t *row;
+    // Строка по состоянию экрана: выключен / заставка / горит.
+    const uint16_t *off, *saver, *on;
     switch (_module) {
       case MODULE_E22_900M30S:
-        row = _display_on ? E22_900M30S_IDLE_ON_MA : E22_900M30S_IDLE_OFF_MA;
+        off = E22_900M30S_IDLE_OFF_MA; saver = E22_900M30S_IDLE_SAVER_MA; on = E22_900M30S_IDLE_ON_MA;
         break;
       case MODULE_HT_RA62:
-        row = _display_on ? HT_RA62_IDLE_ON_MA : HT_RA62_IDLE_OFF_MA;
+        off = HT_RA62_IDLE_OFF_MA; saver = HT_RA62_IDLE_SAVER_MA; on = HT_RA62_IDLE_ON_MA;
         break;
       case MODULE_E22P_868M30S:
-        row = _display_on ? E22P_868M30S_IDLE_ON_MA : E22P_868M30S_IDLE_OFF_MA;
+        off = E22P_868M30S_IDLE_OFF_MA; saver = E22P_868M30S_IDLE_SAVER_MA; on = E22P_868M30S_IDLE_ON_MA;
         break;
       default:
-        row = _display_on ? E22_900M33S_IDLE_ON_MA : E22_900M33S_IDLE_OFF_MA;
+        off = E22_900M33S_IDLE_OFF_MA; saver = E22_900M33S_IDLE_SAVER_MA; on = E22_900M33S_IDLE_ON_MA;
         break;
     }
+    const uint16_t *row = (_display_state == 2) ? on : (_display_state == 1 ? saver : off);
     return interpByIdle(mv, row);
   }
 

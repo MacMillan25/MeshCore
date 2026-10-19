@@ -41,7 +41,9 @@ def table_rows(prefix):
 
 
 def idle_row(prefix, display_on):
-    m = re.search(prefix + ("_IDLE_ON_MA" if display_on else "_IDLE_OFF_MA") + r"\[\]\s*=\s*\{([^}]*)\}", txt)
+    # display_on: 0 — экран выключен, 1 — заставка (контраст 1), 2 — экран горит.
+    key = {0: "_IDLE_OFF_MA", 1: "_IDLE_SAVER_MA", 2: "_IDLE_ON_MA"}[int(display_on)]
+    m = re.search(prefix + key + r"\[\]\s*=\s*\{([^}]*)\}", txt)
     return [float(x) for x in m.group(1).split(",")]
 
 
@@ -124,17 +126,26 @@ print("=== SOC из напряжения (проверка формы) ===")
 for mv in (4200, 4000, 3900, 3800, 3700, 3600, 3550, 3500, 3400, 3200, 3000):
     print(f"  {mv} мВ -> {soc_for_v(mv):5.1f}%   обратно -> {v_for_soc(soc_for_v(mv)):4.0f} мВ")
 print()
+print("=== ETA: 4000 мАч, передач нет, три состояния экрана ===")
+for prefix, label in (("E22_900M33S", "33S"), ("E22_900M30S", "30S"),
+                      ("HT_RA62", "RA62"), ("E22P_868M30S", "E22P")):
+    e_off   = eta_minutes(prefix, 4000, 22, 0, 100.0) / 60
+    e_saver = eta_minutes(prefix, 4000, 22, 1, 100.0) / 60
+    e_on    = eta_minutes(prefix, 4000, 22, 2, 100.0) / 60
+    print(f"  {label:5} : выкл {e_off:6.1f} ч   заставка {e_saver:6.1f} ч   "
+          f"экран {e_on:6.1f} ч")
+print()
 print("=== ETA: 4000 мАч, экран включён, передач нет ===")
 for prefix, label in (("E22_900M33S", "33S"), ("E22_900M30S", "30S"),
                       ("HT_RA62", "RA62"), ("E22P_868M30S", "E22P")):
     for dbm in (22, 0):
-        e = eta_minutes(prefix, 4000, dbm, True, 100.0)
-        naive_i = idle_ma(prefix, v_for_soc(50.0), True)
+        e = eta_minutes(prefix, 4000, dbm, 2, 100.0)
+        naive_i = idle_ma(prefix, v_for_soc(50.0), 2)
         naive = 4000 / naive_i * 60
         print(f"  {label:5} {dbm:3} дБм : ETA {e/60:6.1f} ч   "
               f"(наивно {naive/60:6.1f} ч по току при 50%)")
 print()
 print("=== с передачей 1% времени (4000 мАч, 33S) ===")
 for frac in (0.0, 0.005, 0.01, 0.05):
-    e = eta_minutes("E22_900M33S", 4000, 22, True, 100.0, frac)
+    e = eta_minutes("E22_900M33S", 4000, 22, 2, 100.0, frac)
     print(f"  скважность {frac*100:4.1f}% -> ETA {e/60:6.1f} ч")

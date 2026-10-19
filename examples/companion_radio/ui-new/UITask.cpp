@@ -3476,6 +3476,11 @@ void UITask::enterSaver() {
   _saver_on = true;
   // Контраст минимум: заставка не должна жечь панель и светить ночью.
   _display->setContrast(1);
+#ifdef DARKTEC
+  // Для модели питания заставка — отдельное состояние: ток между «экран
+  // выключен» и «экран горит», иначе ETA завышает остаток.
+  static_cast<DarktecBoard&>(board).setDisplaySaver(true);
+#endif
   const int max_x = _display->width() - 90;
   const int max_y = _display->height() - 37;
   _saver_x = (max_x > 0) ? max_x / 2 : 0;
@@ -3489,10 +3494,12 @@ void UITask::exitSaver() {
   if (!_saver_on) return;
   _saver_on = false;
 #ifdef DARKTEC
-  // Обратно — та яркость, что выбрана в подменю [ Darktec ].
+  // Обратно — та яркость, что выбрана в подменю [ Darktec ]; для модели
+  // питания экран снова обычный «горящий».
   if (_display != NULL) {
     _display->setContrast(DarktecPrefsFormat::brightnessContrast(DarktecPrefs::get().brightness));
   }
+  static_cast<DarktecBoard&>(board).setDisplayOn(true);
 #endif
   _auto_off = millis() + autoOffMillis();
   _next_refresh = 0;
