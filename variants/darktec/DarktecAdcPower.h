@@ -61,7 +61,7 @@ inline void prepareLowPowerWait(uint8_t radio_power_en_pin) {
 
 /**
  * Блокирующий цикл ожидания восстановления пакета по АЦП.
- * radio_power_en_pin — SX126X_POWER_EN (выкл. на время ожидания).
+ * radio_power_en_pin — RADIO_POWER_EN (выкл. на время ожидания).
  * Не возвращается: при recovery — NVIC_SystemReset().
  */
 inline void waitForBatteryRecovery(mesh::MainBoard& board, uint8_t radio_power_en_pin) {

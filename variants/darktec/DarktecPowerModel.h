@@ -30,12 +30,15 @@
 namespace darktec {
 
 // Индексы модулей — порядок обязан совпадать с таблицами в DarktecPowerTables.h.
+// Профиль LR2021 заведён отдельно, но токов для него пока нет: считаем по
+// E22-900M33S (та же мощность 1 Вт). Как снимутся замеры — заменить массивы.
 enum PowerModule : uint8_t {
   MODULE_E22_900M33S  = 0,
   MODULE_E22_900M30S  = 1,
   MODULE_HT_RA62      = 2,
   MODULE_E22P_868M30S = 3,
-  MODULE_COUNT        = 4
+  MODULE_LR2021_1W    = 4,
+  MODULE_COUNT        = 5
 };
 
 // Сколько держать тишину в эфире, прежде чем верить напряжению как напряжению
@@ -68,11 +71,6 @@ public:
     if (mah < 100.0f) return;
     _capacity_mah = mah;
     _eta_valid = false;   // ёмкость поменялась — прогноз начинаем заново
-  }
-
-  void setModule(uint8_t module) {
-    _module = (module < MODULE_COUNT) ? module : MODULE_E22_900M33S;
-    _eta_valid = false;   // другие токи модуля — другой прогноз
   }
 
   void setTxPowerDbm(int8_t dbm) {
@@ -306,7 +304,7 @@ private:
   bool     _polarity_known = false;
   float    _batt_current_ma = 0.0f;
   uint16_t _ocv_mv = 0;
-  uint8_t  _module = MODULE_E22_900M33S;
+  uint8_t  _module = MODULE_LR2021_1W;  // LR2021: замеров нет, таблицы от 33S
   int8_t   _tx_dbm = 22;
   uint8_t  _display_state = 0;   // 0 выкл, 1 заставка, 2 экран
   uint32_t _last_active_ms = 0;
@@ -432,6 +430,8 @@ private:
       case MODULE_E22_900M30S:  return E22_900M30S_TX_MA;
       case MODULE_HT_RA62:      return HT_RA62_TX_MA;
       case MODULE_E22P_868M30S: return E22P_868M30S_TX_MA;
+      // LR2021 (1 Вт): пока по 33S — токов не снимали.
+      case MODULE_LR2021_1W:    return E22_900M33S_TX_MA;
       default:                  return E22_900M33S_TX_MA;
     }
   }
@@ -449,6 +449,7 @@ private:
       case MODULE_E22P_868M30S:
         off = E22P_868M30S_IDLE_OFF_MA; saver = E22P_868M30S_IDLE_SAVER_MA; on = E22P_868M30S_IDLE_ON_MA;
         break;
+      case MODULE_LR2021_1W:   // замеров нет — токи покоя как у 33S
       default:
         off = E22_900M33S_IDLE_OFF_MA; saver = E22_900M33S_IDLE_SAVER_MA; on = E22_900M33S_IDLE_ON_MA;
         break;

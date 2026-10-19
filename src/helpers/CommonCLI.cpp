@@ -537,25 +537,6 @@ void CommonCLI::appendCommonHelp(char* reply, size_t cap) {
 void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* reply) {
   const char* config = &command[4];
 
-#if defined(DARKTEC)
-  // Впаянный радиомодуль: 0 E22-33S, 1 E22-30S, 2 RA62, 3 E22P.
-  // Меняется на лету: board.setRadioModule переводит пин 6 в нужный режим.
-  if (memcmp(config, "radio.module ", 13) == 0) {
-    int idx = (int)_atoi(&config[13]);
-    if (idx > 3) {
-      strcpy(reply, "ERROR: module must be 0-3");
-    } else if (!_board->setRadioModule((uint8_t)idx)) {
-      strcpy(reply, "ERROR: board has no selectable module");
-    } else {
-      DarktecPrefsFormat::Settings s = DarktecPrefs::get();
-      s.module = (uint8_t)idx;
-      DarktecPrefs::save(s);
-      sprintf(reply, "OK - module %d", idx);
-    }
-    return;
-  }
-#endif
-
   if (memcmp(config, "allow.read.only ", 16) == 0) {    _prefs->allow_read_only = memcmp(&config[16], "on", 2) == 0;
     savePrefs();
     strcpy(reply, "OK");
@@ -873,12 +854,6 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
 
 void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* reply) {
   const char* config = &command[4];
-#if defined(DARKTEC)
-  if (memcmp(config, "radio.module", 12) == 0) {
-    sprintf(reply, "> %d", (int)DarktecPrefs::get().module);
-    return;
-  }
-#endif
 #if defined(WITH_COMPANION_CLI)
   if (memcmp(config, "power", 5) == 0) {
     sprintf(reply, "> mode=%s powersaving=%s", powerModeName(_prefs->power_mode),

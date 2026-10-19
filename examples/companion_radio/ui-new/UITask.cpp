@@ -742,7 +742,7 @@ public:
     switch (page) {
 #ifdef UI_DARKTEC_SETTINGS
       case SettingsPage::ROOT:    return 6;   // + [ Darktec ]
-      case SettingsPage::DARKTEC_PAGE: return 7;   // 6 параметров + "Back" внизу
+      case SettingsPage::DARKTEC_PAGE: return 6;   // 5 параметров + "Back" внизу
 #else
       case SettingsPage::ROOT:    return 5;
 #endif
@@ -814,9 +814,9 @@ public:
     }
 #ifdef UI_DARKTEC_SETTINGS
     else if (page == SettingsPage::DARKTEC_PAGE) {
-      // Своя строка выхода внизу списка (как в официалке): i==6 — "Back",
-      // пункты — i==0..5. Без стрелки: курсор ">" рядом с "<" сливается.
-      if (i == 6) return "Back";
+      // Своя строка выхода внизу списка (как в официалке): i==5 — "Back",
+      // пункты — i==0..4. Без стрелки: курсор ">" рядом с "<" сливается.
+      if (i == 5) return "Back";
       if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
         return _darktec_note;
       }
@@ -825,7 +825,6 @@ public:
       if (i == 2) return "Brightness";
       if (i == 3) return "Bar";
       if (i == 4) return "V-Cut";
-      if (i == 5) return "Radio mod";
     }
 #endif
     else if (i == 0) {
@@ -1021,10 +1020,6 @@ public:
         // Порог отключения по низкому напряжению. 0 в prefs = штатные 3.40 В.
         const uint8_t v = s.low_batt_mv100 ? s.low_batt_mv100 : 34;
         snprintf(raw, sizeof(raw), "%u.%uV", (unsigned)(v / 10), (unsigned)(v % 10));
-      } else if (i == 5) {
-        // Порядок обязан совпадать с DarktecPrefsFormat::ModuleCode.
-        static const char* mod_names[4] = { "E22-33S", "E22-30S", "RA62", "E22P" };
-        snprintf(raw, sizeof(raw), "%s", mod_names[s.module < 4 ? s.module : 0]);
       }
       if (raw[0]) {
         snprintf(val, val_len, "%s", raw);
@@ -1197,7 +1192,7 @@ public:
 
 #ifdef UI_DARKTEC_SETTINGS
     // Darktec: правка /darktec.prefs. Пункты — Capacity, Screen on, Brightness,
-    // Radio mod; "Back" — последняя строка (i==4), возврат в корень настроек.
+    // Bar, V-Cut; "Back" — последняя строка (i==5), возврат в корень настроек.
     // Навигация — как в остальных меню: долгое нажатие листает значение вперёд,
     // короткое ведёт курсор вниз, двойное выходит из подстраницы.
     if (page == SettingsPage::DARKTEC_PAGE) {
@@ -1241,9 +1236,6 @@ public:
                  (unsigned)(s.low_batt_mv100 / 10), (unsigned)(s.low_batt_mv100 % 10));
         darktecNote(i, note);
       } else if (i == 5) {
-        s.module = fwd ? (s.module + 1) % 4 : (s.module + 3) % 4;
-        board.setRadioModule(s.module);   // RF-тракт и ETA — сразу
-      } else if (i == 6) {
         // Back — возврат в корень настроек (тот же переход, что у общей
         // строки i==0 на других подстраницах).
         _settings_page = SettingsPage::ROOT;

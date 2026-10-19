@@ -15,7 +15,7 @@
 #include <RadioLib.h>
 #include <helpers/radiolib/RadioLibWrappers.h>
 #include <DarktecBoard.h>
-#include <DarktecSX1262Wrapper.h>
+#include <DarktecLR2021Wrapper.h>
 #include <helpers/AutoDiscoverRTCClock.h>
 #ifdef DISPLAY_CLASS
   #include <DarktecDisplay.h>
@@ -40,12 +40,3 @@ extern DarktecSensorManager sensors;
 
 bool radio_init();
 mesh::LocalIdentity radio_new_identity();
-
-// Применение модуля к RF-тракту: 0=33S, 1=30S, 2=RA62 (pin 6 = RXEN, ведёт
-// RadioLib), 3=E22P (pin 6 = EN, держится высоким вручную). Определена в
-// target.cpp, где живёт объект радио; board зовёт её из setRadioModule().
-void darktec_radio_set_rf(uint8_t module_idx);
-
-// Вызывается после загрузки prefs: ставит модуль, выбранный в настройках.
-// До этого работает DARKTEC_RADIO_DEFAULT_MODULE.
-void darktec_apply_saved_radio_module(uint8_t module_idx);

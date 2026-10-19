@@ -17,10 +17,10 @@
 
 namespace DarktecPrefsFormat {
 
-// Индексы радиомодулей. Порядок ОБЯЗАН совпадать с подписями в UI и с
-// таблицами токов в DarktecPowerTables.h (модель берёт ток по индексу):
+// Индексы радиомодулей. В сборке под LR2021 модуль больше не выбирается:
+// узел один, и этот байт остался только ради совместимости формата v4 —
+// он читается, проверяется и пишется, но ни на что не влияет.
 //   0 E22-900M33S, 1 E22-900M30S, 2 HT-RA62, 3 E22P-868M30S.
-// 0..2 — пин 6 модуля это RXEN под RadioLib; 3 — EN, держится высоким вручную.
 enum ModuleCode : uint8_t {
   MOD_E22_900M33S = 0,
   MOD_E22_900M30S = 1,
@@ -30,7 +30,7 @@ enum ModuleCode : uint8_t {
 
 struct Settings {
   uint16_t capacity_mah;  // ёмкость пакета для режима UserPref, mAh (1000..10000)
-  uint8_t module;         // ModuleCode
+  uint8_t module;         // ModuleCode (не используется, см. комментарий выше)
   uint8_t auto_off_idx;   // 0=15s, 1=30s, 2=1m, 3=5m, 4=1h
   uint8_t noise_idx;      // 0=100ms, 1=250ms, 2=500ms, 3=1000ms (в памяти, не в файле)
   uint8_t capacity_mode;  // CapacityMode: 0=UserPref, 1=3000, 2=4000

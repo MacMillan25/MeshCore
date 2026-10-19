@@ -11,56 +11,22 @@
 #define P_LORA_MISO  15 //P0.02 2
 #define P_LORA_SCLK  12 //P1.11 43
 #define P_LORA_MOSI  14 //P1.15 47
-#define SX126X_POWER_EN 21 //P0.13 13
+#define RADIO_POWER_EN 21 //P0.13 13
 
 /*
- * Управление RF-трактом модуля. Разводка платы (обе ревизии):
- *   пин 6 модуля -> P0.17 (Arduino 2)
- *   пин 7 модуля -> DIO2 модуля (пин 8), напрямую, без ноги MCU
+ * Радио: LR2021 (тестовая сборка на плате DarkTec).
  *
- * Направление передачи задаёт DIO2, и его трогать не нужно: чип SX1262 держит
- * его высоким при передаче и низким в остальное время (SX126X_DIO2_AS_RF_SWITCH).
- * На железе проверено — TX = 3.3 В, RX = 0 В, работает на обоих модулях.
+ * Распиновка пока копирует E22 — плата старая, модуль на проводках:
+ *   SPI   NSS 13, SCLK 12, MOSI 14, MISO 15
+ *   RESET 10, BUSY 16, линия прерываний 11 (DIO8 самого чипа)
+ *   RADIO_POWER_EN 21 — питание модуля
  *
- * Пин 6 у E22 и E22P означает РАЗНОЕ. Раньше это разводилось флагом сборки,
- * теперь модуль — настройка и переключается на лету:
- *
- *   E22-900M33S / E22-900M30S / HT-RA62 — пин 6 это RXEN. RadioLib ведёт ногу
- *                  по таблице RF-ключа: при приёме высокий, на передаче в 0.
- *                  Работает.
- *
- *   E22P-868M30S — пин 6 это EN, общий включатель тракта. Если отдать его
- *                  RadioLib, на передаче нога уходит в 0 и тракт выключается:
- *                  приём пропадает, слышно только в упор. Поэтому у E22P пины
- *                  RF-ключа отключены (setRfSwitchPins(NC, NC)), и пин 6
- *                  держится высоким вручную — в приёме, передаче и покое.
- *
- * RadioLib НЕ получает SX126X_RXEN/TXEN при инициализации: иначе он захватил
- * бы пин 6 раньше, чем прочитана настройка. RF-конфигурация выдаётся позже,
- * из target.cpp (darktec_radio_set_rf), и меняется при смене модуля.
+ * DARKTEC_RADIO_CTRL_PIN (P0.17) — бывший пин 6 модуля E22. У 1-ваттного
+ * модуля это, скорее всего, EN тракта: держим высоким постоянно. Когда
+ * распайка станет известна, здесь появится своя логика — либо таблица
+ * RF-ключа RadioLib, как у Meshnology W12 (setRfSwitchTable).
  */
-#define DARKTEC_RF_SWITCH_PIN 2 // P0.17 — пин 6 модуля
-
-// Модуль по умолчанию до загрузки настроек: 0=33S, 1=30S, 2=RA62, 3=E22P.
-// Настройка prefs перекрывает это сразу после the_mesh.begin().
-#ifndef DARKTEC_RADIO_DEFAULT_MODULE
-#define DARKTEC_RADIO_DEFAULT_MODULE 0
-#endif
-
-// Индексы модулей — общие для prefs, модели питания и строки настроек.
-#define DARKTEC_MODULE_E22_33S 0
-#define DARKTEC_MODULE_E22_30S 1
-#define DARKTEC_MODULE_HT_RA62 2
-#define DARKTEC_MODULE_E22P    3
-#define DARKTEC_MODULE_COUNT   4
-
-// RF-часть переключения модуля живёт в target.cpp: только там есть объект
-// радио. Board её только зовёт, поэтому объявление здесь, а не включение
-// target.h (иначе циклическая зависимость).
-void darktec_radio_set_rf(uint8_t module_idx);
-
-#define SX126X_DIO2_AS_RF_SWITCH  true
-#define SX126X_DIO3_TCXO_VOLTAGE (1.8f)
+#define DARKTEC_RADIO_CTRL_PIN 2 // P0.17
 
 #define  PIN_VBAT_READ 17
 // Делитель батареи: 100к / 100к. Дефолт ADC_MULTIPLIER — в variant.h (1.750f).
@@ -129,8 +95,9 @@ void darktec_radio_set_rf(uint8_t module_idx);
 #ifndef DARKTEC_I_DISPLAY_OFF_MA
 #define DARKTEC_I_DISPLAY_OFF_MA   28.0f    // экран погашен, радио в приёме
 #endif
-// Передача E22 при TX 22 дБм. Импульс, поэтому считается не тиком, а по
+// Передача модуля при TX 22 дБм. Импульс, поэтому считается не тиком, а по
 // фактической длительности передачи — пакет бывает короче одного тика.
+// Значение снято с E22-900M33S: для LR2021 токи ещё не мерили.
 #ifndef DARKTEC_I_TX_MA
 #define DARKTEC_I_TX_MA            1560.0f
 #endif
@@ -182,8 +149,9 @@ protected:
   uint32_t _tx_window_start = 0;
 
   // Модель питания: SOC из напряжения по реальной кривой и ETA интегрированием.
+  // Токи LR2021 ещё не замерены — модель пока считает по профилю E22-900M33S
+  // (см. комментарий в DarktecPowerModel.h).
   darktec::PowerModel _pm;
-  uint8_t  _radio_module = DARKTEC_RADIO_DEFAULT_MODULE;
   int8_t   _tx_dbm = 22;              // выставленная мощность: нужна CLI и модели
 
   void pollChargeSense();
@@ -250,10 +218,9 @@ public:
   // реально льётся в банку (в отличие от модельного getStateLoadMa).
   float getBattCurrentMa() const { return _pm.getBattCurrentMa(); }
 
-  // Модуль и мощность передатчика: то, чем модель различает железо.
+  // Мощность передатчика и ёмкость пакета — то, чем модель различает режимы.
   // Вызывается и из UI компаньона, и из CLI — чтобы у всех ролей было одно.
-  void setPowerModel(uint8_t module, int8_t tx_dbm, float capacity_mah) {
-    _pm.setModule(module);
+  void setPowerModel(int8_t tx_dbm, float capacity_mah) {
     _pm.setTxPowerDbm(tx_dbm);
     _pm.setCapacityMah(capacity_mah);
   }
@@ -262,15 +229,6 @@ public:
     _tx_dbm = tx_dbm;
   }
   int8_t getTxPowerDbm() const { return _tx_dbm; }
-
-  // Отдельно модуль — UI меняет его из настроек, не трогая мощность и ёмкость.
-  void setModule(uint8_t module) { _pm.setModule(module); }
-
-  // Переключение впаянного модуля на лету: обновляет модель питания (ETA) и
-  // переводит пин 6 в нужный режим — RXEN под RadioLib для E22/30S/RA62 или
-  // постоянно высокий EN для E22P. Вызывается из UI и CLI.
-  bool setRadioModule(uint8_t idx) override;
-  int8_t getRadioModule() const override { return (int8_t)_radio_module; }
 
   // Оставлено ради совместимости со старым интерфейсом MeshCore: значение,
   // сохранённое предыдущей прошивкой, теперь не используется — процент
@@ -287,7 +245,7 @@ public:
   void setDisplaySaver(bool on) { _pm.setDisplayState(on ? 1 : 0); }
 
   // Старый интерфейс: UI присылал ток модуля числом. Теперь модель берёт ток
-  // из таблиц по модулю и мощности, поэтому число игнорируем.
+  // из таблиц по мощности, поэтому число игнорируем.
   void setTxCurrentMa(float ma) override { (void)ma; }
 
   void setBatteryCapacityMah(float mah) override { _pm.setCapacityMah(mah); }

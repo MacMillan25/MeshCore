@@ -43,12 +43,12 @@ void DarktecBoard::initiateShutdown(uint8_t reason) {
 #if DARKTEC_BATT_PROTECT == DARKTEC_BATT_PROTECT_ADC
   if (reason == SHUTDOWN_REASON_LOW_VOLTAGE ||
       reason == SHUTDOWN_REASON_BOOT_PROTECT) {
-    darktec::waitForBatteryRecovery(*this, SX126X_POWER_EN);
+    darktec::waitForBatteryRecovery(*this, RADIO_POWER_EN);
     return;  // недостижимо
   }
 #endif
 
-  digitalWrite(SX126X_POWER_EN, LOW);
+  digitalWrite(RADIO_POWER_EN, LOW);
   enterSystemOff(reason);
 }
 #endif
@@ -63,7 +63,7 @@ void DarktecBoard::powerOff() {
 #endif
 
   shutdownPeripherals();
-  digitalWrite(SX126X_POWER_EN, LOW);
+  digitalWrite(RADIO_POWER_EN, LOW);
 
 #ifdef PIN_USER_BTN
   nrf_gpio_cfg_sense_input(g_ADigitalPinMap[PIN_USER_BTN], NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
@@ -92,32 +92,28 @@ void DarktecBoard::begin() {
 
     Wire.begin();
 
-    pinMode(SX126X_POWER_EN, OUTPUT);
+    pinMode(RADIO_POWER_EN, OUTPUT);
 #ifdef NRF52_POWER_MANAGEMENT
 #if DARKTEC_BATT_PROTECT == DARKTEC_BATT_PROTECT_ADC
     // Boot-lock по АЦП пакета (химия): ждём подъёма VBAT на делителе.
     if (darktec::batteryBelowThreshold(*this, PWRMGT_VOLTAGE_BOOTLOCK)) {
-      darktec::waitForBatteryRecovery(*this, SX126X_POWER_EN);
+      darktec::waitForBatteryRecovery(*this, RADIO_POWER_EN);
     }
 #endif
     // LPCOMP runtime alert не включаем (lpcomp_low_refsel=0).
     (void)power_config;
 #endif
-    digitalWrite(SX126X_POWER_EN, HIGH);
-    delay(10);   // дать sx1262 время на включение
+    digitalWrite(RADIO_POWER_EN, HIGH);
+    delay(10);   // дать модулю время на включение
 
-    // Пин 6 модуля (P0.17): до настройки модуля держим высоким. Для E22 это
-    // RXEN в состоянии приёма, для E22P — EN тракта. RadioLib этот пин пока не
-    // знает (SX126X_RXEN/TXEN не заданы), поэтому уронить его некому до того,
-    // как darktec_radio_set_rf() выдаст окончательную конфигурацию.
-    pinMode(DARKTEC_RF_SWITCH_PIN, OUTPUT);
-    digitalWrite(DARKTEC_RF_SWITCH_PIN, HIGH);
+    // Бывший пин 6 модуля E22 (P0.17). У LR2021-модуля это, скорее всего,
+    // EN тракта: держим высоким постоянно, пока распайка не уточнена.
+    pinMode(DARKTEC_RADIO_CTRL_PIN, OUTPUT);
+    digitalWrite(DARKTEC_RADIO_CTRL_PIN, HIGH);
 
     readInaShuntReady();
 
-    // Настройки DarkTec: ёмкость пакета и впаянный модуль. Модуль здесь нужен
-    // только модели питания (ETA); RF-тракт переключается в radio_init(), когда
-    // объект радио уже создан.
+    // Настройки DarkTec: из них берутся ёмкость пакета и порог отключения.
     g_power_board = this;
     DarktecPrefs::begin();
     const DarktecPrefsFormat::Settings& p = DarktecPrefs::get();
@@ -128,19 +124,6 @@ void DarktecBoard::begin() {
     // Ёмкость — с учётом режима UserPref/3000/4000: от неё масштабируются
     // остаток и ETA в модели.
     _pm.setCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(p));
-    _pm.setModule(p.module);
-}
-
-// Переключение впаянного модуля на лету. Порядок индексов тот же, что у модели
-// питания и у строки настроек "Radio Mod": 0=33S, 1=30S, 2=RA62, 3=E22P.
-bool DarktecBoard::setRadioModule(uint8_t idx) {
-  if (idx > 3) {
-    return false;
-  }
-  _radio_module = idx;
-  _pm.setModule(idx);
-  darktec_radio_set_rf(idx);
-  return true;
 }
 
 // Opens the INA3221 on first use and makes sure every channel we read has the
@@ -308,22 +291,6 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
   (void)sender_timestamp;
   DarktecPrefsFormat::Settings s = DarktecPrefs::get();
 
-  if (memcmp(command, "set radio.module ", 17) == 0) {
-    int idx = atoi(&command[17]);
-    if (idx < 0 || idx > 3) {
-      strcpy(reply, "Error: module must be 0..3");
-      return true;
-    }
-    s.module = (uint8_t)idx;
-    DarktecPrefs::save(s);
-    setRadioModule((uint8_t)idx);
-    sprintf(reply, "OK - module %d", idx);
-    return true;
-  }
-  if (memcmp(command, "get radio.module", 16) == 0) {
-    sprintf(reply, "> %d", (int)DarktecPrefs::get().module);
-    return true;
-  }
   // Порог отключения по низкому напряжению — только на текущую сессию, в файл
   // не пишется: после перезагрузки защита снова штатная (3.40 В). Нужно для
   // стенда, где нода питается от ЛБП ниже этого уровня.
