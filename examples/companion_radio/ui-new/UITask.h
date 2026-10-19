@@ -43,6 +43,10 @@ class UITask : public AbstractUITask {
   GenericVibration vibration;
 #endif
   unsigned long _next_refresh, _auto_off;
+  // Состояние иконок в шапке (USB / молния / вилка). Сравнивается каждый цикл:
+  // изменилось — просим кадр, иначе на статичном экране иконка ждала бы его
+  // следующей перерисовки.
+  uint8_t _last_icon_state = 0xFF;
   unsigned long _preview_shown_at = 0;   // millis() a message last came in
   unsigned long _preview_close_at = 0;   // deferred return home after the app read it; 0 = none
   NodePrefs* _node_prefs;

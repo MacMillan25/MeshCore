@@ -3305,6 +3305,20 @@ void UITask::loop() {
   // того, включён экран и какая страница открыта.
   if (home) home->serviceNoise();
 
+  // Иконки в шапке меняются независимо от страницы, а статичный экран (настройки,
+  // часы) перерисовывается редко — без этой проверки молния появлялась только при
+  // смене страницы. Сравнили состояние — изменилось, просим кадр.
+#ifndef DARKTEC
+  const uint8_t icon_state = board.isExternalPowered() ? 1 : 0;
+#else
+  const uint8_t icon_state = (uint8_t)((board.isUsbConnected() ? 1 : 0) |
+                                       (board.getChargeIndicator() << 1));
+#endif
+  if (icon_state != _last_icon_state) {
+    _last_icon_state = icon_state;
+    _next_refresh = 0;
+  }
+
   if (_display != NULL && _display->isOn()) {
     if (millis() >= _next_refresh && curr) {
       _display->startFrame();
