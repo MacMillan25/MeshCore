@@ -5,6 +5,7 @@
 
 #include "DarktecBoard.h"
 #include "DarktecPrefs.h"
+#include "target.h"
 #include <helpers/LowBattGuard.h>
 
 // Фасад для BatteryPack: позволяет ядровому оверлею получить SOC нашей модели,
@@ -290,6 +291,12 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
                                  char* reply) {
   (void)sender_timestamp;
   DarktecPrefsFormat::Settings s = DarktecPrefs::get();
+
+  // `lr2021` — что видит драйвер: статус прерываний чипа, RSSI, счётчики.
+  if (memcmp(command, "lr2021", 6) == 0) {
+    radio_diag(reply, 300);
+    return true;
+  }
 
   // Порог отключения по низкому напряжению — только на текущую сессию, в файл
   // не пишется: после перезагрузки защита снова штатная (3.40 В). Нужно для

@@ -143,6 +143,12 @@ void RadioLibWrapper::recoverMissedDioInterrupt() {
 #endif
 
 void RadioLibWrapper::loop() {
+  // Фолбэк для плат без рабочей линии IRQ: если прерывание не пришло, но в
+  // статусе чипа уже есть RX_DONE/TX_DONE, поднимаем тот же флаг, что и ISR.
+  if ((state & STATE_INT_READY) == 0 && pollPacketFlag()) {
+    state |= STATE_INT_READY;
+  }
+
   // Замер берётся только когда приёмник действительно слушает и пакета нет: во
   // время приёма и передачи RSSI отражает сигнал, а не шум.
   if (state != STATE_RX || isReceivingPacket()) return;

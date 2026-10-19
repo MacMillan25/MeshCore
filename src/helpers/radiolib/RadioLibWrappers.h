@@ -35,6 +35,12 @@ protected:
   virtual bool isReceivingPacket() =0;
   virtual void doResetAGC();
 
+  // Необязательный опрос статуса прерываний по SPI. Нужен платам, где линия
+  // IRQ модуля не совпадает с DIO, настроенным в драйвере, или не разведена:
+  // флаги RX_DONE/TX_DONE всё равно видны в статусе чипа. Плат с рабочим IRQ
+  // это не касается — по умолчанию метод возвращает false.
+  virtual bool pollPacketFlag() { return false; }
+
 public:
   RadioLibWrapper(PhysicalLayer& radio, mesh::MainBoard& board) : _radio(&radio), _board(&board), _preamble_sf(0) { n_recv = n_sent = 0; }
 
