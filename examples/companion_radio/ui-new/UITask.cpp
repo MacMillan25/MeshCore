@@ -2,6 +2,7 @@
 #include "UIExtensions.h"
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/BatteryPack.h>
+#include <helpers/LowBattGuard.h>
 #include "../MyMesh.h"
 #include "../AdcCalibration.h"
 #include "../PowerScreens.h"
@@ -741,7 +742,7 @@ public:
     switch (page) {
 #ifdef UI_DARKTEC_SETTINGS
       case SettingsPage::ROOT:    return 6;   // + [ Darktec ]
-      case SettingsPage::DARKTEC_PAGE: return 6;   // 5 параметров + "Back" внизу
+      case SettingsPage::DARKTEC_PAGE: return 7;   // 6 параметров + "Back" внизу
 #else
       case SettingsPage::ROOT:    return 5;
 #endif
@@ -813,9 +814,9 @@ public:
     }
 #ifdef UI_DARKTEC_SETTINGS
     else if (page == SettingsPage::DARKTEC_PAGE) {
-      // Своя строка выхода внизу списка (как в официалке): i==5 — "Back",
-      // пункты — i==0..4. Без стрелки: курсор ">" рядом с "<" сливается.
-      if (i == 5) return "Back";
+      // Своя строка выхода внизу списка (как в официалке): i==6 — "Back",
+      // пункты — i==0..5. Без стрелки: курсор ">" рядом с "<" сливается.
+      if (i == 6) return "Back";
       if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
         return _darktec_note;
       }
@@ -823,7 +824,8 @@ public:
       if (i == 1) return "Screen on";
       if (i == 2) return "Brightness";
       if (i == 3) return "Bar";
-      if (i == 4) return "Radio mod";
+      if (i == 4) return "Low bat";
+      if (i == 5) return "Radio mod";
     }
 #endif
     else if (i == 0) {
@@ -1016,6 +1018,10 @@ public:
         snprintf(raw, sizeof(raw), "%s",
                  (s.bar_value == DarktecPrefsFormat::BAR_PERCENT) ? "%" : "NF");
       } else if (i == 4) {
+        // Порог отключения по низкому напряжению. 0 в prefs = штатные 3.40 В.
+        const uint8_t v = s.low_batt_mv100 ? s.low_batt_mv100 : 34;
+        snprintf(raw, sizeof(raw), "%u.%uV", (unsigned)(v / 10), (unsigned)(v % 10));
+      } else if (i == 5) {
         // Порядок обязан совпадать с DarktecPrefsFormat::ModuleCode.
         static const char* mod_names[4] = { "E22-33S", "E22-30S", "RA62", "E22P" };
         snprintf(raw, sizeof(raw), "%s", mod_names[s.module < 4 ? s.module : 0]);
@@ -1221,9 +1227,23 @@ public:
         s.bar_value = (uint8_t)(fwd ? (s.bar_value + 1) % n
                                     : (s.bar_value + n - 1) % n);
       } else if (i == 4) {
+        // Порог отключения: 3.4 → 3.0 → 2.5 → 2.0 → 1.0 В (в единицах 100 мВ).
+        // Нужен для стенда: на ЛБП ниже 3.4 В нода иначе выключается.
+        static const uint8_t kSteps[] = { 34, 30, 25, 20, 10 };
+        const uint8_t cur = s.low_batt_mv100 ? s.low_batt_mv100 : 34;
+        int idx = 0;
+        for (int k = 0; k < 5; k++) if (kSteps[k] == cur) idx = k;
+        idx = fwd ? (idx + 1) % 5 : (idx + 4) % 5;
+        s.low_batt_mv100 = kSteps[idx];
+        LowBattGuard::set((uint16_t)s.low_batt_mv100 * 100);
+        char note[20];
+        snprintf(note, sizeof(note), "OFF at %u.%uV",
+                 (unsigned)(s.low_batt_mv100 / 10), (unsigned)(s.low_batt_mv100 % 10));
+        darktecNote(i, note);
+      } else if (i == 5) {
         s.module = fwd ? (s.module + 1) % 4 : (s.module + 3) % 4;
         board.setRadioModule(s.module);   // RF-тракт и ETA — сразу
-      } else if (i == 5) {
+      } else if (i == 6) {
         // Back — возврат в корень настроек (тот же переход, что у общей
         // строки i==0 на других подстраницах).
         _settings_page = SettingsPage::ROOT;
@@ -3204,7 +3224,7 @@ void UITask::shutdown(bool restart){
     // A last frame saying the node is off and how to turn it on; on e-ink it
     // stays on the panel.
     if (_display != NULL) {
-      power_screens::drawPowerOff(_display, _low_battery_off);
+      power_screens::drawPowerOff(_display, _low_battery_off, getBattMilliVolts());
       _display->turnOff();
     board.setDisplayOn(false);   // after the last e-ink frame this keeps the image
     }

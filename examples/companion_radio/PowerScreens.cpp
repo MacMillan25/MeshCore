@@ -42,7 +42,7 @@ void drawBoot(DisplayDriver* d) {
   d->endFrame();
 }
 
-void drawPowerOff(DisplayDriver* d, bool low_battery) {
+void drawPowerOff(DisplayDriver* d, bool low_battery, uint16_t mv) {
   if (!d) return;
   if (!d->isOn()) d->turnOn();
   const char* hint = low_battery ? CHARGE_HINT : POWER_ON_HINT;
@@ -55,7 +55,19 @@ void drawPowerOff(DisplayDriver* d, bool low_battery) {
   d->startFrame();
   d->setColor(UIColor::primary_txt);
   d->setTextSize(1);
-  if (low_battery) { d->drawTextCentered(d->width() / 2, y, _TR("Low battery", "Низкий заряд")); y += lh + 2; }
+  if (low_battery) {
+    // Показываем, что именно увидел АЦП: без этого непонятно, реально банка
+    // села или виноват порог/делитель.
+    char line[40];
+    if (mv > 0) {
+      snprintf(line, sizeof(line), "%s %u.%02uV", _TR("Low battery", "Низкий заряд"),
+               (unsigned)(mv / 1000), (unsigned)((mv % 1000) / 10));
+    } else {
+      snprintf(line, sizeof(line), "%s", _TR("Low battery", "Низкий заряд"));
+    }
+    d->drawTextCentered(d->width() / 2, y, line);
+    y += lh + 2;
+  }
   d->setTextSize(big);
   d->drawTextCentered(d->width() / 2, y, _TR("Turned off", "Выключен"));
   y += bh + 4;

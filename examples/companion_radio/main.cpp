@@ -516,7 +516,7 @@ void setup() {
     delay(200);
     if (power_screens::batteryFlat(board.getBattMilliVolts(), board.isExternalPowered())) {
 #ifdef DISPLAY_CLASS
-      if (disp) power_screens::drawPowerOff(disp, true);
+      if (disp) power_screens::drawPowerOff(disp, true, board.getBattMilliVolts());
 #endif
 #if defined(NRF52_POWER_MANAGEMENT)
       static_cast<NRF52Board&>(board).initiateShutdown(SHUTDOWN_REASON_LOW_VOLTAGE);
