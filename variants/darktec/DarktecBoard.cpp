@@ -308,6 +308,14 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
       snprintf(reply, rlen, "OK dio Hi-Z");
       return true;
     }
+    if (sscanf(command, "lr2021 boost %d", &a) == 1) {
+      radio_set_boost(a != 0, reply, rlen);
+      return true;
+    }
+    if (sscanf(command, "lr2021 listen %d", &a) == 1) {
+      radio_listen((uint8_t)((a < 1 || a > 30) ? 10 : a), reply, rlen);
+      return true;
+    }
     if (sscanf(command, "lr2021 rx %d", &a) == 1) {
       radio_set_rx_mask((uint8_t)a);
       snprintf(reply, rlen, "OK rxm=%u", (unsigned)radio_rx_mask());

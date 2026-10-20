@@ -76,3 +76,9 @@ uint8_t radio_rx_mask();
 // Перебор всех 16 масок приёма: по секунд на вариант, считает преамбулы и
 // принятые пакеты.
 void radio_sweep(uint8_t secs, char* reply, size_t len);
+
+// Приём в обход меша: печатает в порт каждый пакет с кодом ошибки чтения.
+void radio_listen(uint8_t secs, char* reply, size_t len);
+
+// Усиление приёмника (boosted gain) — включить/выключить на ходу.
+void radio_set_boost(bool en, char* reply, size_t len);

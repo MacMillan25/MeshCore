@@ -225,14 +225,15 @@ void radio_diag(char* reply, size_t len) {
 
   snprintf(reply, len,
            "LR2021 %s f=%lu.%03lu bw=%lu.%lu sf=%u cr=%u rf=%u rxm=%u dio=%u "
-           "irq=0x%06lX rssi=%d(%d) rx=%lu s=%lu e=%lu nf=%d p=%lu d=%lu m%d",
+           "irq=0x%06lX pi=0x%06lX rssi=%d rx=%lu s=%lu e=%lu nf=%d p=%lu d=%lu m%d",
            g_radio_ok ? "ok" : "FAIL",
            (unsigned long)(f_khz / 1000), (unsigned long)(f_khz % 1000),
            (unsigned long)(bw10 / 10), (unsigned long)(bw10 % 10),
            (unsigned)radio_driver.getParamSf(), (unsigned)radio_driver.getParamCr(),
            (unsigned)radio_rf_preset(), (unsigned)radio_rx_mask(),
            (unsigned)radio_irq_dio(),
-           (unsigned long)irq, (int)(rssi < 0 ? rssi - 0.5f : rssi + 0.5f), rssi_err,
+           (unsigned long)irq, (unsigned long)radio_driver.getStatPollIrq(),
+           (int)(rssi < 0 ? rssi - 0.5f : rssi + 0.5f),
            (unsigned long)radio_driver.getPacketsRecv(),
            (unsigned long)radio_driver.getPacketsSent(),
            (unsigned long)radio_driver.getPacketsRecvErrors(),
@@ -412,6 +413,74 @@ void radio_sweep(uint8_t secs, char* reply, size_t len) {
 
   radio_set_rx_mask(orig);
   snprintf(reply, len, "%s", out);
+}
+
+// `lr2021 listen [сек]` — приём в обход меша: сами ждём RX_DONE, сами читаем
+// пакет и печатаем в порт длину, код ошибки и первые байты. Если здесь пакеты
+// читаются, а в обычной работе нет — виновата обвязка MeshCore, а не эфир.
+void radio_listen(uint8_t secs, char* reply, size_t len) {
+  if (secs < 1) secs = 1;
+  if (secs > 30) secs = 30;
+
+  radio.standby();
+  radio.clearIrqFlags(0xFFFFFFFF);
+  radio.startReceive();
+
+  uint32_t rx = 0, ok = 0, fail = 0, crc = 0, hdr = 0;
+  int16_t last_err = 0;
+  uint8_t buf[256];
+  const uint32_t end = millis() + (uint32_t)secs * 1000UL;
+
+  while ((int32_t)(millis() - end) < 0) {
+    const uint32_t irq = radio.getIrqFlags();
+    if (irq & RADIOLIB_LR2021_IRQ_RX_DONE) {
+      rx++;
+      if (irq & RADIOLIB_LR2021_IRQ_CRC_ERROR) crc++;
+      if (irq & RADIOLIB_LR2021_IRQ_LORA_HDR_CRC_ERROR) hdr++;
+
+      size_t plen = radio.getPacketLength();
+      if (plen > sizeof(buf)) plen = sizeof(buf);
+      const int16_t err = radio.readData(buf, plen);
+      last_err = err;
+
+      Serial.print("[listen] irq=0x");
+      Serial.print(irq, HEX);
+      Serial.print(" len=");
+      Serial.print(plen);
+      Serial.print(" err=");
+      Serial.print(err);
+      if (err == RADIOLIB_ERR_NONE) {
+        ok++;
+        Serial.print(" :");
+        for (size_t i = 0; i < plen && i < 24; i++) {
+          Serial.print(' ');
+          if (buf[i] < 0x10) Serial.print('0');
+          Serial.print(buf[i], HEX);
+        }
+      } else {
+        fail++;
+      }
+      Serial.println();
+      radio.clearIrqFlags(0xFFFFFFFF);
+    }
+    delay(1);
+  }
+
+  radio.standby();
+  radio.startReceive();
+
+  snprintf(reply, len, "listen %us rx=%lu ok=%lu fail=%lu crc=%lu hdr=%lu e=%d",
+           (unsigned)secs, (unsigned long)rx, (unsigned long)ok,
+           (unsigned long)fail, (unsigned long)crc, (unsigned long)hdr,
+           (int)last_err);
+}
+
+// `lr2021 boost 0|1` — усиление приёмника LR2021. В prefs от старой прошивки
+// мог остаться включённый boosted gain: рядом стоящий передатчик на таком
+// усилении перегружает тракт, и пакеты валятся по CRC.
+void radio_set_boost(bool en, char* reply, size_t len) {
+  const bool ok = radio_driver.setRxBoostedGainMode(en);
+  snprintf(reply, len, "boost %d -> %s", en ? 1 : 0, ok ? "ok" : "fail");
 }
 
 mesh::LocalIdentity radio_new_identity() {

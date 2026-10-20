@@ -39,6 +39,7 @@ class DarktecLR2021Wrapper : public CustomLR2021Wrapper {
   uint32_t _st_read = 0;
   uint32_t _st_len = 0;
   uint32_t _st_irq = 0;
+  uint32_t _st_poll_irq = 0;
 
   static constexpr uint32_t RX_IRQ_BITS =
       RADIOLIB_LR2021_IRQ_RX_DONE | RADIOLIB_LR2021_IRQ_CRC_ERROR |
@@ -68,6 +69,14 @@ public:
   uint32_t getStatRead() const { return _st_read; }
   uint32_t getStatLen() const { return _st_len; }
   uint32_t getStatIrq() const { return _st_irq; }
+  uint32_t getStatPollIrq() const { return _st_poll_irq; }
+
+  // Пакет уже принят (RX_DONE) — не даём CustomLR2021::isReceiving() сбросить
+  // флаги заголовка: readData() проверяет их и без них бракует целый пакет.
+  bool isReceivingPacket() override {
+    if (lr()->getIrqFlags() & RADIOLIB_LR2021_IRQ_RX_DONE) return false;
+    return CustomLR2021Wrapper::isReceivingPacket();
+  }
 
   // Опрос статуса вместо прерывания: поднимаем флаг приёма/передачи сами.
   // По умолчанию ВЫКЛЮЧЕН: на этой плате прерывание от модуля доходит до MCU
@@ -79,6 +88,7 @@ public:
     const uint32_t irq = lr()->getIrqFlags();
     if (irq & (RADIOLIB_LR2021_IRQ_RX_DONE | RADIOLIB_LR2021_IRQ_TX_DONE)) {
       _st_poll++;
+      if (irq & RADIOLIB_LR2021_IRQ_RX_DONE) _st_poll_irq = irq;
       return true;
     }
 #endif
