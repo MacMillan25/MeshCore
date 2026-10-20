@@ -108,7 +108,16 @@ bool DarktecBoard::applyFactoryConfig(NodePrefs& prefs) {
   return changed;
 }
 
+// ДИАГНОСТИКА ГИБЕРНАЦИИ (тестовая сборка d8).
+// Вместо SYSTEMOFF уходим в обычное ожидание с погашенным экраном: если нода и
+// в этом режиме не поднимается по кнопке — значит виснет НЕ сон, а код
+// выключения. Каждая стадия пишется в Serial, чтобы было видно, где встали.
+// После проверки вернуть SYSTEMOFF (раскомментировать блок ниже).
+#define DARKTEC_HIBERNATE_SAFE 1
+
 void DarktecBoard::powerOff() {
+  Serial.println("HIB: start");
+
   // Hibernate / CLI — SYSTEMOFF, как у Rogovogor.
   // ADC-wait только для защиты батареи (initiateShutdown LOW_VOLTAGE/BOOT_PROTECT).
 #ifdef PIN_USER_BTN
@@ -120,7 +129,9 @@ void DarktecBoard::powerOff() {
   }
 #endif
 
+  Serial.println("HIB: shutdownPeripherals");
   shutdownPeripherals();
+  Serial.println("HIB: radio rail off");
   digitalWrite(SX126X_POWER_EN, LOW);
 
 #ifdef PIN_USER_BTN
@@ -130,7 +141,25 @@ void DarktecBoard::powerOff() {
   // разбудят, кабель поднимет ноду без разборки корпуса.
   pwrmgtWakeArmVbus();
 
+#ifdef DARKTEC_HIBERNATE_SAFE
+  // Экран уже погашен. Ждём кнопку до 10 минут, любое нажатие — перезагрузка.
+  Serial.println("HIB: SAFE wait, press button");
+  const uint32_t safe_started = millis();
+  while ((millis() - safe_started) < 600000UL) {
+    if (digitalRead(PIN_USER_BTN) == LOW) {
+      Serial.println("HIB: button pressed -> reboot");
+      delay(50);
+      NVIC_SystemReset();
+    }
+    feedWatchdog();
+    delay(50);
+  }
+  Serial.println("HIB: 10 min timeout -> reboot");
+  NVIC_SystemReset();
+#endif
+
 #ifdef NRF52_POWER_MANAGEMENT
+  Serial.println("HIB: enterSystemOff");
   enterSystemOff(SHUTDOWN_REASON_USER);
 #else
   NRF52Board::powerOff();
