@@ -29,7 +29,11 @@ uint32_t crc32(const uint8_t* data, int len) {
 
 bool isValid(const Blob* b, Payload& out) {
   if (b == nullptr) return false;
-  if (memcmp(b->marker, kMarker, kMarkerSize) != 0) return false;
+  // Сравниваем с текстом метки посимвольно, без массива-копии: литерал
+  // заканчивается нулём, а в блоке на этом месте 0x01 — путаницы нет.
+  static const char kText[] = "DARKTEC-FACTORY";
+  if (memcmp(b->marker, kText, kMarkerSize - 1) != 0) return false;
+  if (b->marker[kMarkerSize - 1] != 0x01) return false;
   if (b->version != kVersion) return false;
   if (b->length != kPayloadSize) return false;   // 0 = заготовка, ничего не применять
   if (crc32(b->payload, kPayloadSize) != b->crc32) return false;
