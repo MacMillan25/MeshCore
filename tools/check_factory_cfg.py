@@ -119,9 +119,11 @@ def main() -> int:
     bad = 0
     for env in envs:
         if args.dir:
+            # В out/uf2 лежат файлы разных версий — берём самый свежий.
             found = glob.glob(os.path.join(args.dir, f"{env}-*.uf2")) + \
                     glob.glob(os.path.join(args.dir, f"{env}.uf2"))
-            path = found[0] if found else ""
+            found = [f for f in found if os.path.isfile(f)]
+            path = max(found, key=os.path.getmtime) if found else ""
         else:
             path = os.path.join(".pio", "build", env, "firmware.uf2")
         if not path or not os.path.isfile(path):
