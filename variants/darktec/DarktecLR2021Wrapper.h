@@ -7,6 +7,10 @@
 #define DARKTEC_LR2021_POLL_IRQ 0
 #endif
 
+#ifndef DARKTEC_LR2021_RAW_LOG
+#define DARKTEC_LR2021_RAW_LOG 0
+#endif
+
 /*
  * LR2021 на плате DarkTec (тестовая сборка).
  *
@@ -89,6 +93,26 @@ public:
       _st_len = (uint32_t)lr()->getPacketLength(false);
     }
     int len = RadioLibWrapper::recvRaw(bytes, sz);
+#if DARKTEC_LR2021_RAW_LOG
+    if (len > 0) {
+      Serial.print("[RX] len=");
+      Serial.print(len);
+      Serial.print(" irq=0x");
+      Serial.print(before, HEX);
+      Serial.print(":");
+      for (int i = 0; i < len && i < 24; i++) {
+        Serial.print(' ');
+        if (bytes[i] < 0x10) Serial.print('0');
+        Serial.print(bytes[i], HEX);
+      }
+      Serial.println();
+    } else if (before & RADIOLIB_LR2021_IRQ_RX_DONE) {
+      Serial.print("[RX] fail irq=0x");
+      Serial.print(before, HEX);
+      Serial.print(" reglen=");
+      Serial.println(_st_len);
+    }
+#endif
     if (len > 0) {
       _dt.onLoRaPacketReceived();
     }
