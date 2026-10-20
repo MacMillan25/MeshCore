@@ -387,9 +387,11 @@ float NRF52Board::getMCUTemperature() {
 void NRF52Board::shutdownPeripherals() {
   // Power off the display if any
 #ifdef DISPLAY_CLASS
-  if (display.isOn()) {
-    display.turnOff();
-  }
+  // Гасим панель всегда, не глядя на isOn(): в гибернации экран до этого
+  // успевает погаснуть логически, а OLED остаётся с включённым charge pump
+  // (это те самые ~20 мА в замере).
+  display.setContrast(0);
+  display.turnOff();
 #endif
   // Prep LoRa radio for power down
   #ifdef P_LORA_RESET
