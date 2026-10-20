@@ -25,6 +25,13 @@ class DarktecLR2021Wrapper : public CustomLR2021Wrapper {
   uint8_t _sf = 0;
   uint8_t _cr = 0;
 
+  // Счётчики для диагностики: сколько раз опрос увидел RX_DONE, сколько раз
+  // пришлось читать, какая была длина в регистре и статус в этот момент.
+  uint32_t _st_poll = 0;
+  uint32_t _st_read = 0;
+  uint32_t _st_len = 0;
+  uint32_t _st_irq = 0;
+
   static constexpr uint32_t RX_IRQ_BITS =
       RADIOLIB_LR2021_IRQ_RX_DONE | RADIOLIB_LR2021_IRQ_CRC_ERROR |
       RADIOLIB_LR2021_IRQ_LORA_HEADER_VALID | RADIOLIB_LR2021_IRQ_LORA_HDR_CRC_ERROR |
@@ -49,14 +56,28 @@ public:
   uint8_t getParamSf() const { return _sf; }
   uint8_t getParamCr() const { return _cr; }
 
+  uint32_t getStatPoll() const { return _st_poll; }
+  uint32_t getStatRead() const { return _st_read; }
+  uint32_t getStatLen() const { return _st_len; }
+  uint32_t getStatIrq() const { return _st_irq; }
+
   // Опрос статуса вместо прерывания: поднимаем флаг приёма/передачи сами.
   bool pollPacketFlag() override {
     const uint32_t irq = lr()->getIrqFlags();
-    return (irq & (RADIOLIB_LR2021_IRQ_RX_DONE | RADIOLIB_LR2021_IRQ_TX_DONE)) != 0;
+    if (irq & (RADIOLIB_LR2021_IRQ_RX_DONE | RADIOLIB_LR2021_IRQ_TX_DONE)) {
+      _st_poll++;
+      return true;
+    }
+    return false;
   }
 
   int recvRaw(uint8_t* bytes, int sz) override {
     const uint32_t before = lr()->getIrqFlags();
+    if (before & RADIOLIB_LR2021_IRQ_RX_DONE) {
+      _st_read++;
+      _st_irq = before;
+      _st_len = (uint32_t)lr()->getPacketLength(false);
+    }
     int len = RadioLibWrapper::recvRaw(bytes, sz);
     if (len > 0) {
       _dt.onLoRaPacketReceived();

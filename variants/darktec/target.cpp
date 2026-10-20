@@ -54,20 +54,24 @@ void radio_diag(char* reply, size_t len) {
   const int rssi_err = radio.getRssiInst(&rssi);
   const uint32_t irq = radio.getIrqFlags();
   const uint32_t f_khz = (uint32_t)(radio_driver.getParamFreq() * 1000.0f + 0.5f);
+  const uint32_t bw10 = (uint32_t)(radio_driver.getParamBw() * 10.0f + 0.5f);
 
   snprintf(reply, len,
-           "LR2021 %s f=%lu.%03lu bw=%d sf=%u cr=%u txp=%d irq=0x%06lX rssi=%d e%d "
-           "rx=%lu sent=%lu err=%lu nf=%d",
+           "LR2021 %s f=%lu.%03lu bw=%lu.%lu sf=%u cr=%u irq=0x%06lX rssi=%d(%d) "
+           "rx=%lu s=%lu e=%lu nf=%d p=%lu d=%lu l=%lu m%d",
            g_radio_ok ? "ok" : "FAIL",
            (unsigned long)(f_khz / 1000), (unsigned long)(f_khz % 1000),
-           (int)(radio_driver.getParamBw() + 0.5f),
+           (unsigned long)(bw10 / 10), (unsigned long)(bw10 % 10),
            (unsigned)radio_driver.getParamSf(), (unsigned)radio_driver.getParamCr(),
-           (int)board.getTxPowerDbm(),
            (unsigned long)irq, (int)(rssi < 0 ? rssi - 0.5f : rssi + 0.5f), rssi_err,
            (unsigned long)radio_driver.getPacketsRecv(),
            (unsigned long)radio_driver.getPacketsSent(),
            (unsigned long)radio_driver.getPacketsRecvErrors(),
-           radio_driver.getNoiseFloor());
+           radio_driver.getNoiseFloor(),
+           (unsigned long)radio_driver.getStatPoll(),
+           (unsigned long)radio_driver.getStatRead(),
+           (unsigned long)radio_driver.getStatLen(),
+           (int)radio_driver.isInRecvMode());
 }
 
 // `lr2021 scan` — слушаем эфир N секунд и считаем, что именно чип видит:
@@ -80,7 +84,7 @@ void radio_scan(uint8_t seconds, char* reply, size_t len) {
 
   radio.standby();
   radio.clearIrqFlags(0xFFFFFFFF);
-  radio.startReceive();
+  const int16_t st = radio.startReceive();
 
   uint32_t pre = 0, hdr = 0, done = 0, crc = 0, hdrerr = 0, to = 0;
   int16_t rssi_min = 0, rssi_max = 0;
@@ -114,13 +118,17 @@ void radio_scan(uint8_t seconds, char* reply, size_t len) {
 
   radio.clearIrqFlags(0xFFFFFFFF);
   radio.standby();
-  radio.startReceive();
+  const int16_t st2 = radio.startReceive();
+  uint8_t ptype = 0xFF;
+  radio.getPacketType(&ptype);
 
   snprintf(reply, len,
-           "scan %us pre=%lu hdr=%lu done=%lu crc=%lu hdrerr=%lu to=%lu rssi=%d..%d",
-           (unsigned)seconds, (unsigned long)pre, (unsigned long)hdr,
-           (unsigned long)done, (unsigned long)crc, (unsigned long)hdrerr,
-           (unsigned long)to, (int)rssi_min, (int)rssi_max);
+           "scan %us st=%d/%d pt=%u pre=%lu hdr=%lu done=%lu crc=%lu hdrerr=%lu "
+           "to=%lu rssi=%d..%d",
+           (unsigned)seconds, (int)st, (int)st2, (unsigned)ptype,
+           (unsigned long)pre, (unsigned long)hdr, (unsigned long)done,
+           (unsigned long)crc, (unsigned long)hdrerr, (unsigned long)to,
+           (int)rssi_min, (int)rssi_max);
 }
 
 mesh::LocalIdentity radio_new_identity() {
