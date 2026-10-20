@@ -126,13 +126,34 @@ public:
     _batt_current_ma = batt_current_ma;
     _ocv_mv = ocvFromTerminalPolar(batt_mv, batt_current_ma);
 
-    // Процент по кривой — и сразу сглаженный: одиночный шумный замер не должен
-    // дёргать остаток в мАч и ETA.
     const float soc_now = socFromVoltage(_ocv_mv);
     if (!_soc_valid) {
       _soc = soc_now;
       _soc_valid = true;
+    }
+
+    if (charging) {
+      const float i_ma = signedChargeCurrentMa(batt_current_ma);
+      if (!_charge_track) {
+        // Начало заряда: запоминаем остаток по текущему проценту и дальше
+        // живём только счётом кулонов.
+        _charge_mah = _capacity_mah * _soc / 100.0f;
+        _charge_track = true;
+        _charge_last_ms = now_ms;
+      } else {
+        const uint32_t dt = now_ms - _charge_last_ms;
+        _charge_last_ms = now_ms;
+        // Защита от скачков времени и от долгих пауз: не больше минуты за тик.
+        if (dt > 0 && dt <= 60000) {
+          _charge_mah += i_ma * ((float)dt / 3600000.0f);
+        }
+        if (_charge_mah > _capacity_mah) _charge_mah = _capacity_mah;
+      }
+      _soc = _capacity_mah > 0.0f ? _charge_mah * 100.0f / _capacity_mah : _soc;
     } else {
+      _charge_track = false;
+      // Разряд: процент по кривой, сглаженный. Одиночный шумный замер не
+      // должен дёргать остаток в мАч и ETA.
       _soc += (soc_now - _soc) * SOC_SMOOTH_ALPHA;
     }
 
@@ -244,22 +265,17 @@ private:
     return minutes;
   }
 
+  // Остаток пути до полного, делённый на текущий ток заряда. Остаток ведётся
+  // кулоновским счётом от момента подключения зарядника, поэтому CV-фазу
+  // (ток падает) формула отрабатывает сама: числитель уменьшается, знаменатель
+  // тоже, и прогноз не приходится растягивать коэффициентами.
   float computeChargeEtaMinutes() const {
-    if (!_soc_valid || !_charging) return 0.0f;
+    if (!_soc_valid || !_charging || !_charge_track) return 0.0f;
     const float i_ma = signedChargeCurrentMa(_batt_current_ma);
     if (i_ma < CHARGE_DETECT_MA) return 0.0f;
-    const float soc = _soc;
-    if (soc >= 99.5f) return 0.0f;
-
-    const float remain_mah = _capacity_mah * (100.0f - soc) / 100.0f;
-    float minutes = remain_mah / i_ma * 60.0f;
-
-    // CV-фаза: после 80% зарядник держит напряжение и ток спадает, поэтому
-    // линейный прогноз занижает время. Коэффициент растёт от 1 до 5.
-    if (soc > 80.0f) {
-      minutes *= 1.0f + 4.0f * (soc - 80.0f) / 20.0f;
-    }
-    return minutes;
+    const float remain_mah = _capacity_mah - _charge_mah;
+    if (remain_mah <= 0.0f) return 0.0f;
+    return remain_mah / i_ma * 60.0f;
   }
 
   // Сглаживание ETA: экспонента плюс ограничение прыжка за тик.
@@ -302,6 +318,13 @@ private:
   float    _soc = 100.0f;
   bool     _soc_valid = false;
   bool     _charging = false;
+  // Кулоновский счёт во время заряда: остаток фиксируется на старте заряда и
+  // дальше только прибавляется по измеренному току. Напряжение банки под
+  // зарядом врёт (2 А поднимают клеммы почти до 4.2 В), поэтому процент и
+  // остаток в это время берутся отсюда, а не из кривой.
+  bool     _charge_track = false;
+  uint32_t _charge_last_ms = 0;
+  float    _charge_mah = 0.0f;
   bool     _invert_current = false;
   bool     _polarity_known = false;
   float    _batt_current_ma = 0.0f;

@@ -107,7 +107,10 @@ void darktec_radio_set_rf(uint8_t module_idx);
 // Напряжение CHRG при этом всё равно должно быть выше DARKTEC_CHARGE_DETECT_V,
 // иначе иконки нет.
 #ifndef DARKTEC_CHARGE_ICON_MA
-#define DARKTEC_CHARGE_ICON_MA 120.0f
+#define DARKTEC_CHARGE_ICON_MA 150.0f   // ток пакета, выше которого «идёт заряд»
+#endif
+#ifndef DARKTEC_CHARGE_ICON_HYST_MA
+#define DARKTEC_CHARGE_ICON_HYST_MA 15.0f  // обратно на «вилку» только ниже 135 мА
 #endif
 
 // Тик интегрирования тока. Не привязан к обновлению экрана: счётчик живёт в
