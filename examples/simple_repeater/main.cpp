@@ -124,6 +124,21 @@ void setup() {
 
   the_mesh.begin(fs);
 
+#ifdef DARKTEC
+  // Заводские настройки из образа: применяем один раз (повторно блок
+  // игнорируется по CRC в prefs). Радио перестраиваем сразу.
+  {
+    NodePrefs* np = the_mesh.getNodePrefs();
+    if (board.applyFactoryConfig(*np)) {
+      the_mesh.savePrefs();
+      if (board.factoryRadioChanged()) {
+        radio_driver.setParams(np->freq, np->bw, np->sf, np->cr);
+        radio_driver.setTxPower(np->tx_power_dbm);
+      }
+    }
+  }
+#endif
+
 #ifdef DISPLAY_CLASS
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
 #endif

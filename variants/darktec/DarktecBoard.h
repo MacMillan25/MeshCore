@@ -3,7 +3,10 @@
 #include <MeshCore.h>
 #include <Arduino.h>
 #include <helpers/NRF52Board.h>
-#include <helpers/NodePrefs.h>
+
+// Общий тип настроек ядра. Только объявление: в simple_secure_chat свой
+// NodePrefs, и подключать сюда helpers/NodePrefs.h нельзя — будет редукция.
+struct NodePrefs;
 
 #define P_LORA_NSS 13 //P1.13 45
 #define P_LORA_DIO_1 11 //P0.10 10
@@ -365,6 +368,8 @@ public:
   // Переносит заводские настройки из блока в образе в prefs (один раз на
   // сборку). true — что-то применили, вызывающий должен сохранить NodePrefs.
   // Радио-параметры применяет вызывающий: у платы нет доступа к radio_driver.
+  // Звать только там, где используется общий helpers/NodePrefs.h (compаньон,
+  // репитер, комната, сенсор); в simple_secure_chat и KISS свой набор полей.
   bool applyFactoryConfig(NodePrefs& prefs);
   bool factoryRadioChanged() const { return _factory_radio_changed; }
 

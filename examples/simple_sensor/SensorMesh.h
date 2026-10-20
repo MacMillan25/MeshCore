@@ -38,7 +38,7 @@
 #endif
 
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION   "v1.18.0d6"
+  #define FIRMWARE_VERSION   "v1.18.0d7"
 #endif
 
 #define FIRMWARE_ROLE "sensor"
