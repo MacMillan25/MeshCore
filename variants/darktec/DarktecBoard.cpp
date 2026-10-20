@@ -134,6 +134,17 @@ void DarktecBoard::powerOff() {
   shutdownPeripherals();
   digitalWrite(SX126X_POWER_EN, LOW);
 
+  // Гасим BLE-стек. Без этого SoftDevice будит ядро на каждый интервал
+  // рекламы и держит радио включённым — в замере гибернация жрала 38 мА
+  // вместо единиц. После выключения стека живём на голом WFE.
+  uint8_t sd_enabled = 0;
+  sd_softdevice_is_enabled(&sd_enabled);
+  if (sd_enabled) {
+    sd_softdevice_disable();
+    sd_enabled = 0;
+  }
+  MESH_DEBUG_PRINTLN("HIB: BLE stack stopped");
+
 #ifdef PIN_USER_BTN
   nrf_gpio_cfg_input(g_ADigitalPinMap[PIN_USER_BTN], NRF_GPIO_PIN_PULLUP);
   NRF_GPIOTE->CONFIG[0] =
@@ -146,8 +157,6 @@ void DarktecBoard::powerOff() {
   // Тик выключаем: иначе WFE просыпается каждую миллисекунду и жрёт ток.
   SysTick->CTRL &= ~SysTick_CTRL_TICKINT_Msk;
 
-  uint8_t sd_enabled = 0;
-  sd_softdevice_is_enabled(&sd_enabled);
   for (;;) {
     if (sd_enabled) {
       sd_app_evt_wait();
