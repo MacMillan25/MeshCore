@@ -1893,7 +1893,9 @@ public:
           snprintf(bbuf, sizeof(bbuf), "ETA    CHG %luh %lum",
                    (unsigned long)(eta_min / 60), (unsigned long)(eta_min % 60));
         } else {
-          snprintf(bbuf, sizeof(bbuf), "ETA    CHG --");
+          // Прогноза нет: ток упал ниже порога «вилки» — заливка закончилась,
+          // зарядник просто держит подпитку.
+          snprintf(bbuf, sizeof(bbuf), "ETA    CHG done");
         }
       } else {
         snprintf(bbuf, sizeof(bbuf), "ETA    %luh %lum",

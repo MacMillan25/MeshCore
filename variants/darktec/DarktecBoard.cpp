@@ -267,10 +267,10 @@ void DarktecBoard::loop() {
   if (present) {
     float batt_a = _ina.getCurrentAmps(DARKTEC_INA_BATT_CH);
     float batt_ma = isnan(batt_a) ? 0.0f : fabsf(batt_a) * 1000.0f;
-    // Гкстерезис: включаем молнию выше 150 мА, возвращаем вилку только ниже
-    // 135 мА. Без запаса значок дребезжал на границе (ток плавает на ±10 мА).
+    // Гистерезис 15 мА: молния — выше 165 мА, вилка — ниже 150 мА. Без запаса
+    // значок дребезжал на границе: ток плавает на ±10 мА.
     const float on_ma = DARKTEC_CHARGE_ICON_MA;
-    const float off_ma = on_ma - DARKTEC_CHARGE_ICON_HYST_MA;
+    const float off_ma = DARKTEC_CHARGE_ICON_OFF_MA;
     if (batt_ma > on_ma) {
       _charge_icon = 1;
     } else if (batt_ma < off_ma) {
