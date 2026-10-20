@@ -98,11 +98,12 @@ void darktec_radio_set_rf(uint8_t module_idx);
 #ifndef DARKTEC_CHARGE_DETECT_V
 #define DARKTEC_CHARGE_DETECT_V 4.5f
 #endif
-// Порог тока CHRG для индикатора на экране: выше — идёт заряд (молния), ниже —
-// заряд закончился и зарядник держит подпитку (вилка). Напряжение CHRG при этом
-// всё равно должно быть выше DARKTEC_CHARGE_DETECT_V, иначе иконки нет.
+// Порог тока пакета (канал BATT) для индикатора на экране: выше — идёт заряд
+// (молния), ниже — заливка закончилась и зарядник держит подпитку (вилка).
+// Напряжение CHRG при этом всё равно должно быть выше DARKTEC_CHARGE_DETECT_V,
+// иначе иконки нет.
 #ifndef DARKTEC_CHARGE_ICON_MA
-#define DARKTEC_CHARGE_ICON_MA 50.0f
+#define DARKTEC_CHARGE_ICON_MA 120.0f
 #endif
 
 // Тик интегрирования тока. Не привязан к обновлению экрана: счётчик живёт в
