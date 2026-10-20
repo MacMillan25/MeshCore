@@ -6,6 +6,7 @@
 #include "DarktecBoard.h"
 #include "DarktecPrefs.h"
 #include "DarktecFactoryCfg.h"
+#include <helpers/NodePrefs.h>
 #include <helpers/LowBattGuard.h>
 
 // Фасад для BatteryPack: позволяет ядровому оверлею получить SOC нашей модели,
@@ -53,6 +54,59 @@ void DarktecBoard::initiateShutdown(uint8_t reason) {
   enterSystemOff(reason);
 }
 #endif
+
+
+bool DarktecBoard::applyFactoryConfig(NodePrefs& prefs) {
+  DarktecFactoryCfg::Payload p;
+  const auto* blob = DarktecFactoryCfg::blob();
+  if (!DarktecFactoryCfg::isValid(blob, p)) return false;
+  if (p.flags == 0) return false;
+
+  DarktecPrefsFormat::Settings s = DarktecPrefs::get();
+  // Один и тот же блок применяем ровно один раз: CRC запоминаем в prefs.
+  if (s.factory_crc == blob->crc32) return false;
+
+  bool changed = false;
+
+  if (p.flags & DarktecFactoryCfg::FLAG_NAME) {
+    p.name[sizeof(p.name) - 1] = 0;
+    if (p.name[0] != 0) {
+      strncpy(prefs.node_name, (const char*)p.name, sizeof(prefs.node_name) - 1);
+      prefs.node_name[sizeof(prefs.node_name) - 1] = 0;
+      changed = true;
+    }
+  }
+
+  if (p.flags & DarktecFactoryCfg::FLAG_RADIO) {
+    prefs.freq = p.freq;
+    prefs.bw = p.bw;
+    prefs.sf = p.sf;
+    prefs.cr = p.cr;
+    prefs.tx_power_dbm = p.tx_dbm;
+    _factory_radio_changed = true;
+    _pm.setTxPowerDbm(p.tx_dbm);
+    changed = true;
+  }
+
+  if (p.flags & DarktecFactoryCfg::FLAG_CAPACITY) {
+    s.capacity_mode = p.capacity_mode;
+    s.capacity_mah = p.capacity_mah;
+    _pm.setCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(s));
+    changed = true;
+  }
+
+  if (p.flags & DarktecFactoryCfg::FLAG_MODULE) {
+    s.module = p.module;
+    setRadioModule(p.module);
+    changed = true;
+  }
+
+  // CRC записываем всегда, даже если флаги ничего не поменяли: иначе блок
+  // будет применяться на каждом старте.
+  s.factory_crc = blob->crc32;
+  DarktecPrefs::save(s);
+  return changed;
+}
 
 void DarktecBoard::powerOff() {
   // Hibernate / CLI — SYSTEMOFF, как у Rogovogor.

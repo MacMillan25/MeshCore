@@ -3,6 +3,7 @@
 #include <MeshCore.h>
 #include <Arduino.h>
 #include <helpers/NRF52Board.h>
+#include <helpers/NodePrefs.h>
 
 #define P_LORA_NSS 13 //P1.13 45
 #define P_LORA_DIO_1 11 //P0.10 10
@@ -174,6 +175,7 @@ protected:
   float    _charge_mah = 0.0f;        // mAh poured into the pack this session
   bool     _charger_present = false;
   uint8_t  _charge_icon = 0;   // 0 нет / 1 молния / 2 вилка
+  bool     _factory_radio_changed = false;  // заводские настройки поменяли радио
   uint32_t _charge_last_ms = 0;
   uint32_t _charge_session_ms = 0;
   uint32_t _full_hold_ms = 0;         // сколько ток заряда держится ниже порога
@@ -360,6 +362,11 @@ public:
 
   // Hibernate / CLI: SYSTEMOFF. Защита батареи — ADC-wait в initiateShutdown.
   void powerOff() override;
+  // Переносит заводские настройки из блока в образе в prefs (один раз на
+  // сборку). true — что-то применили, вызывающий должен сохранить NodePrefs.
+  // Радио-параметры применяет вызывающий: у платы нет доступа к radio_driver.
+  bool applyFactoryConfig(NodePrefs& prefs);
+  bool factoryRadioChanged() const { return _factory_radio_changed; }
 
   // CLI-команды DarkTec. Компаньон разбирает команды сам и до CommonCLI
   // не доходит, поэтому держим их здесь — работает у всех ролей.
