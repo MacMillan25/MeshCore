@@ -294,22 +294,47 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
 
   // `lr2021` — что видит драйвер: статус прерываний чипа, RSSI, счётчики.
   // `lr2021 scan [сек]` — посчитать, что приходит из эфира (по умолчанию 5 с).
+  // `lr2021 rf N` — вариант таблицы RF-ключа (1 основной, 2 питание постоянно,
+  //                3 все DIO в нуле).
+  // `lr2021 dio N 0|1` — вручную выставить ногу DIO чипа.
+  // `lr2021 irq N` — перевести ногу N в прерывание и перезапустить приём.
+  // reply у ролей разного размера (у компаньона 320, у репитера 160), поэтому
+  // во все функции передаём 150 байт — строки короче.
+  const size_t rlen = 150;
+  {
+    int a = 0, b = 0;
+    if (sscanf(command, "lr2021 dio %d %d", &a, &b) == 2) {
+      radio_dio((uint8_t)a, b != 0);
+      snprintf(reply, rlen, "OK dio %d = %d", a, b != 0 ? 1 : 0);
+      return true;
+    }
+    if (sscanf(command, "lr2021 irq %d", &a) == 1) {
+      radio_set_irq((uint8_t)a);
+      snprintf(reply, rlen, "OK irq dio=%u", (unsigned)radio_irq_dio());
+      return true;
+    }
+    if (sscanf(command, "lr2021 rf %d", &a) == 1) {
+      radio_apply_rf((uint8_t)a);
+      snprintf(reply, rlen, "OK rf=%u", (unsigned)radio_rf_preset());
+      return true;
+    }
+  }
   if (memcmp(command, "lr2021 scan", 11) == 0) {
     const int secs = atoi(&command[11]);
-    radio_scan((uint8_t)((secs < 1 || secs > 30) ? 5 : secs), reply, 300);
+    radio_scan((uint8_t)((secs < 1 || secs > 30) ? 5 : secs), reply, rlen);
     return true;
   }
   if (memcmp(command, "lr2021 spi", 10) == 0) {
-    radio_spi_test(reply, 300);
+    radio_spi_test(reply, rlen);
     return true;
   }
   if (memcmp(command, "lr2021 tx", 9) == 0) {
     const int n = atoi(&command[9]);
-    radio_tx_test((uint8_t)((n < 1 || n > 10) ? 1 : n), reply, 300);
+    radio_tx_test((uint8_t)((n < 1 || n > 10) ? 1 : n), reply, rlen);
     return true;
   }
   if (memcmp(command, "lr2021", 6) == 0) {
-    radio_diag(reply, 300);
+    radio_diag(reply, rlen);
     return true;
   }
 

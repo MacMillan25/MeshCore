@@ -15,6 +15,7 @@
 #include <RadioLib.h>
 #include <helpers/radiolib/RadioLibWrappers.h>
 #include <DarktecBoard.h>
+#include <DarktecLR2021Radio.h>
 #include <DarktecLR2021Wrapper.h>
 #include <helpers/AutoDiscoverRTCClock.h>
 #ifdef DISPLAY_CLASS
@@ -54,3 +55,12 @@ void radio_spi_test(char* reply, size_t len);
 
 // `lr2021 tx [n]` — передать n сырых пакетов и посчитать, доходит ли TX_DONE.
 void radio_tx_test(uint8_t count, char* reply, size_t len);
+
+// RF-тракт модуля: таблица RF-ключа (1 = основной вариант, 2 = питание
+// усилителя постоянно, 3 = все DIO в нуле), ручное управление ногой и смена
+// ноги прерывания. Всё это нужно на время разборки с железом.
+void radio_apply_rf(uint8_t preset);
+uint8_t radio_rf_preset();
+void radio_dio(uint8_t dio, bool high);
+void radio_set_irq(uint8_t dio);
+uint8_t radio_irq_dio();

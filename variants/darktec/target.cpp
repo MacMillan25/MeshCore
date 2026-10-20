@@ -34,6 +34,120 @@ AutoDiscoverRTCClock rtc_clock(fallback_clock);
 
 static bool g_radio_ok = false;
 
+// ---- RF-тракт модуля NiceRF LoRa2021F33-2G4 ----------------------------------
+// Модуль сам тракт не коммутирует: по блок-схеме его усилители, LNA и ключ
+// 5-вольтового питания висят на ногах DIO5..DIO8 чипа:
+//   DIO7 -> Power_EN (PMOS, питание усилителя 5 В)
+//   DIO8 -> TXEN усилителя 2.4 ГГц
+//   DIO6 -> TXEN усилителя sub-GHz (и ключ антенны),
+//   DIO5 -> LNA 2.4 ГГц (по даташиту модуля его нормально держать высоким).
+// Таблица RF-ключа говорит чипу, в каких режимах какая нога высокая; дальше он
+// дёргает их сам при переходе в Rx/Tx, без участия прошивки.
+// Без этой таблицы ноги висят в Hi-Z, усилитель не включается — приём еле
+// теплится, передачи нет вообще.
+
+static const uint32_t rf_dios[5] = {
+  RADIOLIB_LR2021_DIO5, RADIOLIB_LR2021_DIO6, RADIOLIB_LR2021_DIO7,
+  RADIOLIB_LR2021_DIO8, RADIOLIB_NC
+};
+
+// Основной вариант: питание усилителя только на передаче, 2.4G LNA — только
+// в высокочастотных режимах.
+static const Module::RfSwitchMode_t rf_table_main[] = {
+  { LR2021::MODE_STBY,  { LOW,  LOW,  LOW,  LOW,  LOW } },
+  { LR2021::MODE_RX,    { LOW,  LOW,  LOW,  LOW,  LOW } },
+  { LR2021::MODE_TX,    { LOW,  HIGH, HIGH, LOW,  LOW } },
+  { LR2021::MODE_RX_HF, { HIGH, LOW,  HIGH, LOW,  LOW } },
+  { LR2021::MODE_TX_HF, { HIGH, LOW,  HIGH, HIGH, LOW } },
+  END_OF_MODE_TABLE,
+};
+
+// Вариант, если питание усилителя держат постоянно.
+static const Module::RfSwitchMode_t rf_table_pwr_on[] = {
+  { LR2021::MODE_STBY,  { LOW,  LOW,  HIGH, LOW,  LOW } },
+  { LR2021::MODE_RX,    { LOW,  LOW,  HIGH, LOW,  LOW } },
+  { LR2021::MODE_TX,    { LOW,  HIGH, HIGH, LOW,  LOW } },
+  { LR2021::MODE_RX_HF, { HIGH, LOW,  HIGH, LOW,  LOW } },
+  { LR2021::MODE_TX_HF, { HIGH, LOW,  HIGH, HIGH, LOW } },
+  END_OF_MODE_TABLE,
+};
+
+// Все ноги в нуле — «ничего не управляем».
+static const Module::RfSwitchMode_t rf_table_off[] = {
+  { LR2021::MODE_STBY,  { LOW, LOW, LOW, LOW, LOW } },
+  { LR2021::MODE_RX,    { LOW, LOW, LOW, LOW, LOW } },
+  { LR2021::MODE_TX,    { LOW, LOW, LOW, LOW, LOW } },
+  { LR2021::MODE_RX_HF, { LOW, LOW, LOW, LOW, LOW } },
+  { LR2021::MODE_TX_HF, { LOW, LOW, LOW, LOW, LOW } },
+  END_OF_MODE_TABLE,
+};
+
+// На передаче поднимаем оба TXEN: если перепутано, какой из DIO6/DIO8 тянет
+// усилитель 868 МГц, тракт всё равно откроется.
+static const Module::RfSwitchMode_t rf_table_both_txen[] = {
+  { LR2021::MODE_STBY,  { LOW,  LOW,  LOW,  LOW,  LOW } },
+  { LR2021::MODE_RX,    { LOW,  LOW,  LOW,  LOW,  LOW } },
+  { LR2021::MODE_TX,    { LOW,  HIGH, HIGH, HIGH, LOW } },
+  { LR2021::MODE_RX_HF, { HIGH, LOW,  HIGH, LOW,  LOW } },
+  { LR2021::MODE_TX_HF, { HIGH, LOW,  HIGH, HIGH, LOW } },
+  END_OF_MODE_TABLE,
+};
+
+// Питание усилителя постоянно, на передаче — все TXEN.
+static const Module::RfSwitchMode_t rf_table_max[] = {
+  { LR2021::MODE_STBY,  { LOW,  LOW,  HIGH, LOW,  LOW } },
+  { LR2021::MODE_RX,    { LOW,  LOW,  HIGH, LOW,  LOW } },
+  { LR2021::MODE_TX,    { LOW,  HIGH, HIGH, HIGH, LOW } },
+  { LR2021::MODE_RX_HF, { HIGH, LOW,  HIGH, LOW,  LOW } },
+  { LR2021::MODE_TX_HF, { HIGH, LOW,  HIGH, HIGH, LOW } },
+  END_OF_MODE_TABLE,
+};
+
+static uint8_t g_rf_preset = 1;
+
+void radio_apply_rf(uint8_t preset) {
+  const Module::RfSwitchMode_t* t = rf_table_main;
+  switch (preset) {
+    case 2: t = rf_table_pwr_on; break;
+    case 3: t = rf_table_off; break;
+    case 4: t = rf_table_both_txen; break;
+    case 5: t = rf_table_max; break;
+    default: preset = 1; break;
+  }
+
+  radio.setRfSwitchTable(rf_dios, t);
+  g_rf_preset = preset;
+
+  radio.standby();
+  radio.startReceive();
+}
+
+uint8_t radio_rf_preset() { return g_rf_preset; }
+
+// Ручное управление ногой DIO — для разборки с трактом на живом железе.
+void radio_dio(uint8_t dio, bool high) {
+  if (dio < 5 || dio > 11) return;
+  radio.dioLevel(dio, high);
+}
+
+// Смена ноги прерывания: старую гасим, новую переводим в IRQ и заново
+// запускаем приём.
+void radio_set_irq(uint8_t dio) {
+  if (dio < 5 || dio > 11) return;
+  const uint8_t old = (uint8_t)radio.irqDioNum;
+  if (old >= 5 && old <= 11 && old != dio) {
+    radio.dioNone(old);
+  }
+  radio.irqDioNum = dio;
+  radio.dioFunction(dio, RADIOLIB_LR2021_DIO_FUNCTION_IRQ,
+                    dio == 5 ? RADIOLIB_LR2021_DIO_SLEEP_PULL_UP
+                             : RADIOLIB_LR2021_DIO_SLEEP_PULL_AUTO);
+  radio.standby();
+  radio.startReceive();
+}
+
+uint8_t radio_irq_dio() { return (uint8_t)radio.irqDioNum; }
+
 bool radio_init() {
   rtc_clock.begin(Wire);
 
@@ -46,6 +160,8 @@ bool radio_init() {
   Serial.println(g_radio_ok ? "ok" : "FAIL");
 
   if (g_radio_ok) {
+    radio_apply_rf(1);
+
     float rssi = 0.0f;
     if (radio.getRssiInst(&rssi) == RADIOLIB_ERR_NONE) {
       Serial.print("[LR2021] rssi ");
@@ -66,12 +182,13 @@ void radio_diag(char* reply, size_t len) {
   const uint32_t bw10 = (uint32_t)(radio_driver.getParamBw() * 10.0f + 0.5f);
 
   snprintf(reply, len,
-           "LR2021 %s f=%lu.%03lu bw=%lu.%lu sf=%u cr=%u irq=0x%06lX rssi=%d(%d) "
-           "rx=%lu s=%lu e=%lu nf=%d p=%lu d=%lu l=%lu m%d",
+           "LR2021 %s f=%lu.%03lu bw=%lu.%lu sf=%u cr=%u rf=%u dio=%u "
+           "irq=0x%06lX rssi=%d(%d) rx=%lu s=%lu e=%lu nf=%d p=%lu d=%lu m%d",
            g_radio_ok ? "ok" : "FAIL",
            (unsigned long)(f_khz / 1000), (unsigned long)(f_khz % 1000),
            (unsigned long)(bw10 / 10), (unsigned long)(bw10 % 10),
            (unsigned)radio_driver.getParamSf(), (unsigned)radio_driver.getParamCr(),
+           (unsigned)radio_rf_preset(), (unsigned)radio_irq_dio(),
            (unsigned long)irq, (int)(rssi < 0 ? rssi - 0.5f : rssi + 0.5f), rssi_err,
            (unsigned long)radio_driver.getPacketsRecv(),
            (unsigned long)radio_driver.getPacketsSent(),
@@ -79,7 +196,6 @@ void radio_diag(char* reply, size_t len) {
            radio_driver.getNoiseFloor(),
            (unsigned long)radio_driver.getStatPoll(),
            (unsigned long)radio_driver.getStatRead(),
-           (unsigned long)radio_driver.getStatLen(),
            (int)radio_driver.isInRecvMode());
 }
 
