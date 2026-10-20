@@ -105,6 +105,38 @@ static const Module::RfSwitchMode_t rf_table_max[] = {
 
 static uint8_t g_rf_preset = 1;
 
+// Маска состояния DIO5..DIO8 в режиме приёма: бит0 = DIO5, бит1 = DIO6,
+// бит2 = DIO7, бит3 = DIO8. Передача при этом всегда остаётся рабочей
+// (DIO6 + DIO7 высокие) — её мы уже проверили на живом эфире.
+// Нужна, чтобы перебрать варианты приёма без перепрошивки.
+static uint8_t g_rx_mask = 0;
+
+static uint32_t rx_bit(uint8_t mask, uint8_t i) {
+  return ((mask >> i) & 1) ? HIGH : LOW;
+}
+
+static void build_custom_table(uint8_t mask, Module::RfSwitchMode_t* t) {
+  t[0] = { LR2021::MODE_STBY,  { rx_bit(mask, 0), rx_bit(mask, 1), rx_bit(mask, 2), rx_bit(mask, 3), LOW } };
+  t[1] = { LR2021::MODE_RX,    { rx_bit(mask, 0), rx_bit(mask, 1), rx_bit(mask, 2), rx_bit(mask, 3), LOW } };
+  t[2] = { LR2021::MODE_TX,    { LOW, HIGH, HIGH, LOW, LOW } };
+  t[3] = { LR2021::MODE_RX_HF, { HIGH, LOW, HIGH, LOW, LOW } };
+  t[4] = { LR2021::MODE_TX_HF, { HIGH, LOW, HIGH, HIGH, LOW } };
+  t[5] = END_OF_MODE_TABLE;
+}
+
+static Module::RfSwitchMode_t g_custom_table[6];
+
+void radio_set_rx_mask(uint8_t mask) {
+  g_rx_mask = mask & 0x0F;
+  build_custom_table(g_rx_mask, g_custom_table);
+  radio.setRfSwitchTable(rf_dios, g_custom_table);
+  g_rf_preset = 0;
+  radio.standby();
+  radio.startReceive();
+}
+
+uint8_t radio_rx_mask() { return g_rx_mask; }
+
 void radio_apply_rf(uint8_t preset) {
   const Module::RfSwitchMode_t* t = rf_table_main;
   switch (preset) {
@@ -148,6 +180,16 @@ void radio_set_irq(uint8_t dio) {
 
 uint8_t radio_irq_dio() { return (uint8_t)radio.irqDioNum; }
 
+// Вернуть DIO5..DIO8 в Hi-Z: так модуль вёл себя до всех наших настроек,
+// и на той прошивке один пакет от репитера поймали. Нужно для сравнения.
+void radio_dio_release(void) {
+  for (uint8_t d = 5; d <= 8; d++) {
+    radio.dioNone(d);
+  }
+  radio.standby();
+  radio.startReceive();
+}
+
 bool radio_init() {
   rtc_clock.begin(Wire);
 
@@ -182,13 +224,14 @@ void radio_diag(char* reply, size_t len) {
   const uint32_t bw10 = (uint32_t)(radio_driver.getParamBw() * 10.0f + 0.5f);
 
   snprintf(reply, len,
-           "LR2021 %s f=%lu.%03lu bw=%lu.%lu sf=%u cr=%u rf=%u dio=%u "
+           "LR2021 %s f=%lu.%03lu bw=%lu.%lu sf=%u cr=%u rf=%u rxm=%u dio=%u "
            "irq=0x%06lX rssi=%d(%d) rx=%lu s=%lu e=%lu nf=%d p=%lu d=%lu m%d",
            g_radio_ok ? "ok" : "FAIL",
            (unsigned long)(f_khz / 1000), (unsigned long)(f_khz % 1000),
            (unsigned long)(bw10 / 10), (unsigned long)(bw10 % 10),
            (unsigned)radio_driver.getParamSf(), (unsigned)radio_driver.getParamCr(),
-           (unsigned)radio_rf_preset(), (unsigned)radio_irq_dio(),
+           (unsigned)radio_rf_preset(), (unsigned)radio_rx_mask(),
+           (unsigned)radio_irq_dio(),
            (unsigned long)irq, (int)(rssi < 0 ? rssi - 0.5f : rssi + 0.5f), rssi_err,
            (unsigned long)radio_driver.getPacketsRecv(),
            (unsigned long)radio_driver.getPacketsSent(),
@@ -327,6 +370,48 @@ void radio_tx_test(uint8_t count, char* reply, size_t len) {
   snprintf(reply, len, "tx n=%u ok=%u fail=%u noirq=%u e=%d",
            (unsigned)count, (unsigned)ok, (unsigned)fail, (unsigned)noirq,
            (int)last_err);
+}
+
+// `lr2021 sweep [сек]` — перебор всех 16 состояний DIO5..DIO8 в приёме.
+// Для каждой маски слушаем эфир и считаем преамбулы/принятые пакеты. Передача
+// при этом остаётся рабочей, поэтому в эфире ничего не ломается.
+void radio_sweep(uint8_t secs, char* reply, size_t len) {
+  if (secs < 1) secs = 1;
+  if (secs > 5) secs = 5;
+
+  const uint8_t orig = g_rx_mask;
+  char out[200];
+  size_t pos = 0;
+  pos += snprintf(out + pos, sizeof(out) - pos, "sweep:");
+
+  for (uint8_t m = 0; m < 16 && pos < sizeof(out) - 16; m++) {
+    radio_set_rx_mask(m);
+    uint32_t pre = 0, done = 0, crc = 0;
+    const uint32_t end = millis() + (uint32_t)secs * 1000UL;
+    while ((int32_t)(millis() - end) < 0) {
+      const uint32_t irq = radio.getIrqFlags();
+      if (irq) {
+        if (irq & RADIOLIB_LR2021_IRQ_PREAMBLE_DETECTED) pre++;
+        if (irq & RADIOLIB_LR2021_IRQ_RX_DONE) done++;
+        if (irq & RADIOLIB_LR2021_IRQ_CRC_ERROR) crc++;
+        radio.clearIrqFlags(irq);
+      }
+      delay(1);
+    }
+    pos += snprintf(out + pos, sizeof(out) - pos, " %u:%lu/%lu",
+                    (unsigned)m, (unsigned long)pre, (unsigned long)done);
+    Serial.print("[sweep] mask ");
+    Serial.print(m);
+    Serial.print(" pre=");
+    Serial.print(pre);
+    Serial.print(" done=");
+    Serial.print(done);
+    Serial.print(" crc=");
+    Serial.println(crc);
+  }
+
+  radio_set_rx_mask(orig);
+  snprintf(reply, len, "%s", out);
 }
 
 mesh::LocalIdentity radio_new_identity() {

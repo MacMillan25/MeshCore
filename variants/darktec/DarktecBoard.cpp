@@ -303,6 +303,20 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
   const size_t rlen = 150;
   {
     int a = 0, b = 0;
+    if (memcmp(command, "lr2021 none", 11) == 0) {
+      radio_dio_release();
+      snprintf(reply, rlen, "OK dio Hi-Z");
+      return true;
+    }
+    if (sscanf(command, "lr2021 rx %d", &a) == 1) {
+      radio_set_rx_mask((uint8_t)a);
+      snprintf(reply, rlen, "OK rxm=%u", (unsigned)radio_rx_mask());
+      return true;
+    }
+    if (sscanf(command, "lr2021 sweep %d", &a) == 1 || memcmp(command, "lr2021 sweep", 12) == 0) {
+      radio_sweep((uint8_t)((a < 1 || a > 5) ? 2 : a), reply, rlen);
+      return true;
+    }
     if (sscanf(command, "lr2021 dio %d %d", &a, &b) == 2) {
       radio_dio((uint8_t)a, b != 0);
       snprintf(reply, rlen, "OK dio %d = %d", a, b != 0 ? 1 : 0);

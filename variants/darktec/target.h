@@ -64,3 +64,15 @@ uint8_t radio_rf_preset();
 void radio_dio(uint8_t dio, bool high);
 void radio_set_irq(uint8_t dio);
 uint8_t radio_irq_dio();
+
+// Отпустить DIO5..DIO8 в Hi-Z (как было до настройки тракта).
+void radio_dio_release(void);
+
+// Состояние DIO5..DIO8 в приёме задаётся маской (бит0=DIO5 ... бит3=DIO8).
+// Передача при этом не меняется — остаётся рабочей.
+void radio_set_rx_mask(uint8_t mask);
+uint8_t radio_rx_mask();
+
+// Перебор всех 16 масок приёма: по секунд на вариант, считает преамбулы и
+// принятые пакеты.
+void radio_sweep(uint8_t secs, char* reply, size_t len);
