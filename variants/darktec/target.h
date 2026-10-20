@@ -48,3 +48,6 @@ void radio_diag(char* reply, size_t len);
 // `lr2021 scan` — слушает эфир seconds секунд и считает преамбулы, заголовки,
 // пакеты и ошибки CRC. Пишет итог в reply.
 void radio_scan(uint8_t seconds, char* reply, size_t len);
+
+// `lr2021 spi` — 200 чтений версии чипа: проверка целостности линии SPI.
+void radio_spi_test(char* reply, size_t len);

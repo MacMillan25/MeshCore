@@ -1,10 +1,19 @@
 #include <Arduino.h>
+#include <SPI.h>
 #include "target.h"
 #include <helpers/ArduinoHelpers.h>
 
 DarktecBoard board;
 
-RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, SPI);
+// Скорость SPI к модулю. Провода на макетке длинные, поэтому её можно
+// понизить флагом сборки: -D LORA_SPI_HZ=1000000.
+#ifndef LORA_SPI_HZ
+#define LORA_SPI_HZ 2000000
+#endif
+
+RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, SPI,
+                               SPISettings(LORA_SPI_HZ, MSBFIRST, SPI_MODE0));
+
 
 WRAPPER_CLASS radio_driver(radio, board);
 
@@ -129,6 +138,32 @@ void radio_scan(uint8_t seconds, char* reply, size_t len) {
            (unsigned long)pre, (unsigned long)hdr, (unsigned long)done,
            (unsigned long)crc, (unsigned long)hdrerr, (unsigned long)to,
            (int)rssi_min, (int)rssi_max);
+}
+
+// `lr2021 spi` — проверка линии SPI: 200 раз читаем версию чипа (она
+// неизменна) и считаем, сколько ответов не совпало с первым. Если есть
+// расхождения или ответы FF/FF — дело в проводке, земле или скорости шины,
+// а не в радио.
+void radio_spi_test(char* reply, size_t len) {
+  uint8_t ref_maj = 0, ref_min = 0;
+  (void)radio.getVersion(&ref_maj, &ref_min);
+
+  int bad = 0, all_ff = 0, errs = 0;
+  for (int i = 0; i < 200; i++) {
+    uint8_t maj = 0, min = 0;
+    const int16_t st = radio.getVersion(&maj, &min);
+    if (st != RADIOLIB_ERR_NONE) {
+      errs++;
+      continue;
+    }
+    if (maj != ref_maj || min != ref_min) {
+      bad++;
+      if (maj == 0xFF && min == 0xFF) all_ff++;
+    }
+  }
+
+  snprintf(reply, len, "spi v=%u.%u n=200 bad=%d ff=%d err=%d hz=%d",
+           (unsigned)ref_maj, (unsigned)ref_min, bad, all_ff, errs, (int)LORA_SPI_HZ);
 }
 
 mesh::LocalIdentity radio_new_identity() {

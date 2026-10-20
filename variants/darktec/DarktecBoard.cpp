@@ -299,6 +299,10 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
     radio_scan((uint8_t)((secs < 1 || secs > 30) ? 5 : secs), reply, 300);
     return true;
   }
+  if (memcmp(command, "lr2021 spi", 10) == 0) {
+    radio_spi_test(reply, 300);
+    return true;
+  }
   if (memcmp(command, "lr2021", 6) == 0) {
     radio_diag(reply, 300);
     return true;
