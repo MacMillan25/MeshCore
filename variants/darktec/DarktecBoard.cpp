@@ -146,6 +146,14 @@ void DarktecBoard::powerOff() {
   MESH_DEBUG_PRINTLN("HIB: BLE stack stopped");
 
 #ifdef PIN_USER_BTN
+#  ifndef DARKTEC_HIBERNATE_BTN_WAKE
+#    define DARKTEC_HIBERNATE_BTN_WAKE 1   // 0 — кнопка спящую ноду не будит
+#  endif
+
+  // Тик выключаем: иначе WFE просыпается каждую миллисекунду и жрёт ток.
+  SysTick->CTRL &= ~SysTick_CTRL_TICKINT_Msk;
+
+#  if DARKTEC_HIBERNATE_BTN_WAKE
   nrf_gpio_cfg_input(g_ADigitalPinMap[PIN_USER_BTN], NRF_GPIO_PIN_PULLUP);
   NRF_GPIOTE->CONFIG[0] =
       ((uint32_t)GPIOTE_CONFIG_MODE_Event << GPIOTE_CONFIG_MODE_Pos) |
@@ -153,9 +161,6 @@ void DarktecBoard::powerOff() {
       ((uint32_t)GPIOTE_CONFIG_POLARITY_HiToLo << GPIOTE_CONFIG_POLARITY_Pos);
   NRF_GPIOTE->EVENTS_IN[0] = 0;
   NRF_GPIOTE->INTENSET = GPIOTE_INTENSET_IN0_Msk;
-
-  // Тик выключаем: иначе WFE просыпается каждую миллисекунду и жрёт ток.
-  SysTick->CTRL &= ~SysTick_CTRL_TICKINT_Msk;
 
   for (;;) {
     if (sd_enabled) {
@@ -167,6 +172,16 @@ void DarktecBoard::powerOff() {
       NVIC_SystemReset();   // delay() здесь нельзя: SysTick уже остановлен
     }
   }
+#  else
+  // Тест: кнопка не будит, поднимает только RST.
+  for (;;) {
+    if (sd_enabled) {
+      sd_app_evt_wait();
+    } else {
+      __WFE();
+    }
+  }
+#  endif
 #else
   NRF52Board::powerOff();
 #endif
