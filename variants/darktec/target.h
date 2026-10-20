@@ -44,3 +44,7 @@ mesh::LocalIdentity radio_new_identity();
 // Диагностика для CLI `lr2021`: состояние чипа, статус прерываний, RSSI,
 // счётчики. Пишет в reply не больше len байт.
 void radio_diag(char* reply, size_t len);
+
+// `lr2021 scan` — слушает эфир seconds секунд и считает преамбулы, заголовки,
+// пакеты и ошибки CRC. Пишет итог в reply.
+void radio_scan(uint8_t seconds, char* reply, size_t len);

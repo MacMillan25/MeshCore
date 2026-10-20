@@ -293,6 +293,12 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
   DarktecPrefsFormat::Settings s = DarktecPrefs::get();
 
   // `lr2021` — что видит драйвер: статус прерываний чипа, RSSI, счётчики.
+  // `lr2021 scan [сек]` — посчитать, что приходит из эфира (по умолчанию 5 с).
+  if (memcmp(command, "lr2021 scan", 11) == 0) {
+    const int secs = atoi(&command[11]);
+    radio_scan((uint8_t)((secs < 1 || secs > 30) ? 5 : secs), reply, 300);
+    return true;
+  }
   if (memcmp(command, "lr2021", 6) == 0) {
     radio_diag(reply, 300);
     return true;
