@@ -40,6 +40,7 @@ class DarktecLR2021Wrapper : public CustomLR2021Wrapper {
   uint32_t _st_len = 0;
   uint32_t _st_irq = 0;
   uint32_t _st_poll_irq = 0;
+  uint32_t _rx_active_at = 0;
 
   static constexpr uint32_t RX_IRQ_BITS =
       RADIOLIB_LR2021_IRQ_RX_DONE | RADIOLIB_LR2021_IRQ_CRC_ERROR |
@@ -71,11 +72,39 @@ public:
   uint32_t getStatIrq() const { return _st_irq; }
   uint32_t getStatPollIrq() const { return _st_poll_irq; }
 
-  // Пакет уже принят (RX_DONE) — не даём CustomLR2021::isReceiving() сбросить
-  // флаги заголовка: readData() проверяет их и без них бракует целый пакет.
+  // Прерывание CAD выключено насовсем: scanChannel() в драйвере сбрасывает
+  // IRQ-флаги и перезапускает приём, из-за чего уже принятый пакет теряется
+  // (именно так у нас пропадал бит HEADER_VALID перед чтением).
+  void setCADEnabled(bool enable) override {
+    (void)enable;
+    RadioLibWrapper::setCADEnabled(false);
+  }
+
+  // Свой вариант «идёт приём»: не трогаем флаги чипа. Штатный
+  // CustomLR2021::isReceiving() при бите ошибки CRC заголовка гасит
+  // HEADER_VALID/PREAMBLE — а пакет к этому моменту уже лежит в FIFO,
+  // и readData() бракует его как «заголовок битый».
   bool isReceivingPacket() override {
-    if (lr()->getIrqFlags() & RADIOLIB_LR2021_IRQ_RX_DONE) return false;
-    return CustomLR2021Wrapper::isReceivingPacket();
+    const uint32_t irq = lr()->getIrqFlags();
+    if (irq & RADIOLIB_LR2021_IRQ_RX_DONE) return true;
+
+    const bool hdr = (irq & RADIOLIB_LR2021_IRQ_LORA_HEADER_VALID) != 0;
+    const bool pre = (irq & RADIOLIB_LR2021_IRQ_PREAMBLE_DETECTED) != 0;
+    if (!hdr && !pre) {
+      _rx_active_at = 0;
+      return false;
+    }
+
+    const uint32_t now = millis();
+    if (_rx_active_at == 0) _rx_active_at = now;
+    if (now - _rx_active_at > 5000) {   // залипший флаг — чистим сами
+      lr()->clearIrqFlags(RADIOLIB_LR2021_IRQ_PREAMBLE_DETECTED |
+                          RADIOLIB_LR2021_IRQ_LORA_HEADER_VALID |
+                          RADIOLIB_LR2021_IRQ_LORA_HDR_CRC_ERROR);
+      _rx_active_at = 0;
+      return false;
+    }
+    return true;
   }
 
   // Опрос статуса вместо прерывания: поднимаем флаг приёма/передачи сами.
