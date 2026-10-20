@@ -112,7 +112,10 @@ void DarktecBoard::powerOff() {
   // Hibernate / CLI — SYSTEMOFF, как у Rogovogor.
   // ADC-wait только для защиты батареи (initiateShutdown LOW_VOLTAGE/BOOT_PROTECT).
 #ifdef PIN_USER_BTN
-  while (digitalRead(PIN_USER_BTN) == LOW) {
+  // Ждём отпускания кнопки, но НЕ бесконечно: если пин почему-то читается
+  // низким, нода раньше подвешивалась здесь навсегда и «не включалась».
+  const uint32_t wait_started = millis();
+  while (digitalRead(PIN_USER_BTN) == LOW && (millis() - wait_started) < 5000) {
     delay(10);
   }
 #endif
@@ -123,6 +126,9 @@ void DarktecBoard::powerOff() {
 #ifdef PIN_USER_BTN
   nrf_gpio_cfg_sense_input(g_ADigitalPinMap[PIN_USER_BTN], NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
 #endif
+  // Запасной путь пробуждения: воткнутый USB. Если кнопка или Reset не
+  // разбудят, кабель поднимет ноду без разборки корпуса.
+  pwrmgtWakeArmVbus();
 
 #ifdef NRF52_POWER_MANAGEMENT
   enterSystemOff(SHUTDOWN_REASON_USER);
