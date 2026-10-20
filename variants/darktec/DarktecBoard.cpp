@@ -201,13 +201,15 @@ void DarktecBoard::loop() {
   }
   bool present = (chrg_v > DARKTEC_CHARGE_DETECT_V);
 
-  // Индикатор на экране: пока шина CHRG под напряжением, смотрим на её ток.
-  // Выше порога — идёт заряд (молния), ниже — заряд закончился, зарядник просто
-  // держит подпитку (вилка). Считаем здесь же: замер напряжения уже сделан.
+  // Индикатор на экране: зарядник есть (шина CHRG под напряжением), а идёт ли
+  // заряд — смотрим по току ПАКЕТА, канал BATT. Выше порога — молния, ниже —
+  // заливка закончилась, зарядник просто держит подпитку (вилка).
+  // Ток берём по модулю: знак зависит от полярности шунта на конкретной плате,
+  // а индикатору важно только «идёт заряд или нет».
   if (present) {
-    float chrg_a = _ina.getCurrentAmps(DARKTEC_INA_CHARGE_CH);
-    float chrg_ma = isnan(chrg_a) ? 0.0f : chrg_a * 1000.0f;
-    _charge_icon = (chrg_ma > DARKTEC_CHARGE_ICON_MA) ? 1 : 2;
+    float batt_a = _ina.getCurrentAmps(DARKTEC_INA_BATT_CH);
+    float batt_ma = isnan(batt_a) ? 0.0f : fabsf(batt_a) * 1000.0f;
+    _charge_icon = (batt_ma > DARKTEC_CHARGE_ICON_MA) ? 1 : 2;
   } else {
     _charge_icon = 0;
   }
