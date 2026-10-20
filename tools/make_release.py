@@ -71,20 +71,20 @@ def find_uf2(env, version):
 
 
 def find_zip(env, version):
-    """DFU-пакет для обновления по воздуху (bootloader OTAFIX/Nordic DFU).
+    """DFU-пакет для обновления по воздуху (bootloader OTAFIX / Nordic DFU).
 
-    PlatformIO кладёт его в .pio/build/<env>/firmware.zip при обычной сборке
-    (не при -t create_uf2). Если в out/uf2 уже лежит готовый `<env>-...zip`,
-    берём его.
+    Свежий пакет всегда лежит в .pio/build/<env>/firmware.zip — его делает
+    обычная сборка `pio run -e <env>`. Цель `-t create_uf2` его НЕ создаёт.
+    Если свежего нет, берём готовую копию из out/uf2 (там имя содержит хеш).
     """
+    fresh = os.path.join(".pio", "build", env, "firmware.zip")
+    if os.path.exists(fresh):
+        return fresh
     out = os.path.join("out", "uf2")
     if os.path.isdir(out):
         for name in os.listdir(out):
             if name.startswith(env) and version in name and name.endswith(".zip"):
                 return os.path.join(out, name)
-    p = os.path.join(".pio", "build", env, "firmware.zip")
-    if os.path.exists(p):
-        return p
     raise SystemExit(f"Нет DFU-zip для {env} — собери `pio run -e {env}` (без -t create_uf2)")
 
 

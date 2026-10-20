@@ -226,7 +226,10 @@ sensor list                            ->  RELAY=... (и прочие настр
 - PlatformIO живёт в `%USERPROFILE%\.platformio\penv\Scripts\pio.exe`, в PATH его нет.
 - `pio run -e <env>` — сборка. Первая после чистого клона качает тулчейн (~15 минут), дальше один env ~35 с.
 - Если падает `MissingPackageManifestError` или «библиотека не найдена» — удалить `.pio/libdeps/<env>` и запустить `pio pkg install -e <env>`.
-- **`pio run` НЕ создаёт `.uf2`.** Он делает `firmware.elf`, `firmware.hex` и `firmware.zip` (пакет Nordic DFU, UF2 внутри нет).
+- **`pio run` НЕ создаёт `.uf2`.** Он делает `firmware.elf`, `firmware.hex` и `firmware.zip` —
+  это **пакет Nordic DFU для обновления по воздуху** (OTA, бутлоадер OTAFIX). Цель
+  `-t create_uf2` его не создаёт, поэтому на релизе каждую роль собираем ещё и обычным
+  `pio run -e <env>`.
 - UF2 получается целью `create_uf2` (`pio run -e <env> -t create_uf2`) или скриптом `build-darktec-uf2.ps1`, кладётся в `out\uf2\` (каталог в `.gitignore`).
 - Проверка настоящего UF2: первые 4 байта `55 46 32 0a`, familyID (байты 28–31) `40 28 a5 ad` = `0xADA52840`, размер кратен 512.
 - **Кириллица в пути ломает `create_uf2`** (`uf2conv.py: error: unrecognized arguments`). Путь проекта — без кириллицы. Обход: `python bin\uf2conv\uf2conv.py <hex> -c -o <uf2> -f 0xADA52840`.
@@ -353,7 +356,18 @@ sensor list                            ->  RELAY=... (и прочие настр
 
 - Прошивка — **1.18.0d6** (beeline09 `south_edition`, `83f2b0b4`), рабочая ветка — `darktec` (переименована из `feat/darktec-e22p`; историю переписали force-push'ем при переносе на новую базу).
 - **Версионность:** база остаётся `1.18.0`, наши выпуски — с суффиксом `d`: `1.18.0d1`, `1.18.0d2`, `1.18.0d3`, `1.18.0d4`, `1.18.0d5`, `1.18.0d6`, … Суффикс `d` отличает наши сборки от `b`-сборок beeline. Версия живёт в `examples/*/MyMesh.h` (`FIRMWARE_VERSION`), скрипт `build-darktec-uf2.ps1` понимает суффикс и кладёт `out\uf2\<env>-v1.18.0d6-<дата>.uf2`. Текст релиза — `docs/release-notes-<версия>.md`, его читает `tools/make_release.py --notes`.
-- **Релизы прошивки** — в `MacMillan25/MeshCore`, теги `darktec-v1.18.0dN`, ассеты `<env>.uf2` (8 ролей). Прошивальщик берёт список через GitHub API и качает по выбранной версии.
+- **Релизы прошивки** — в `MacMillan25/MeshCore`, теги `darktec-v1.18.0dN`. В релиз идут **16 ассетов**:
+  восемь `<env>.uf2` (прошивка через UF2, их берёт DarkFlasher) и восемь
+  `<env>-v<версия>-<хеш>.zip` — **DFU-пакеты для обновления по воздуху** (OTA: бутлоадер
+  OTAFIX, приложения nRF Connect Device Manager / dfu.py). `tools/make_release.py` кладёт и
+  те и другие сам.
+- **zip-пакеты собираются ТОЛЬКО на релизе.** В промежуточных тестовых сборках (dN для
+  проверки) их не делаем и никуда не выкладываем — лишняя работа и лишний повод перепутать
+  версии.
+
+  Порядок релиза: поднять версию → для каждой из 8 ролей `pio run -e <env>` (собирает
+  `firmware.elf/hex/zip`) и `pio run -e <env> -t create_uf2` → разложить UF2 в `out/uf2` →
+  `python tools/make_release.py --version <версия> --notes docs/release-notes-<версия>.md`.
 - Поверх базы перенесены наши фичи с 1.17.1: экраны шума/INA/батареи, подменю `[ Darktec ]`, реле T2, `set radio.module`, наша модель SOC/ETA и заставка. Его `DarktecSoc*`/ETA удалены.
 - Старая ветка 1.17.1 сохранена тегом `backup/darktec-1.17.1-final` (`c24f7583`) — при нужде достаётся одной командой.
 - PR #35 (beeline09 `south_edition`) закрыт. Если понадобится снова — открывается из `darktec` в `beeline09:south_edition`.
