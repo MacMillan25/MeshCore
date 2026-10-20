@@ -116,64 +116,48 @@ bool DarktecBoard::applyFactoryConfig(NodePrefs& prefs) {
 // #define DARKTEC_HIBERNATE_SAFE 1
 
 void DarktecBoard::powerOff() {
-  Serial.println("HIB: start");
-
-  // Hibernate / CLI — SYSTEMOFF, как у Rogovogor.
-  // ADC-wait только для защиты батареи (initiateShutdown LOW_VOLTAGE/BOOT_PROTECT).
+  // Гибернация. SYSTEMOFF сознательно НЕ используем: в нём разбудить чип можно
+  // только по GPIO-детекту, LPCOMP, NFC или VBUS, а pin-reset оттуда не
+  // поднимает — а нам нужно, чтобы нода включалась именно кнопкой RST.
+  // Поэтому гасим периферию, выключаем тик и спим в WFE с живым ядром:
+  // так работают оба пути (RST — обычный сброс, BTN — событие GPIOTE),
+  // а потребление остаётся низким: тактирование и радио выключены.
 #ifdef PIN_USER_BTN
-  // Ждём отпускания кнопки, но НЕ бесконечно: если пин почему-то читается
-  // низким, нода раньше подвешивалась здесь навсегда и «не включалась».
+  // Ждём отпускания кнопки, но не бесконечно: залипший LOW раньше подвешивал
+  // ноду здесь навсегда.
   const uint32_t wait_started = millis();
   while (digitalRead(PIN_USER_BTN) == LOW && (millis() - wait_started) < 5000) {
     delay(10);
   }
 #endif
 
-  Serial.println("HIB: shutdownPeripherals");
   shutdownPeripherals();
-  Serial.println("HIB: radio rail off");
   digitalWrite(SX126X_POWER_EN, LOW);
 
 #ifdef PIN_USER_BTN
-  nrf_gpio_cfg_sense_input(g_ADigitalPinMap[PIN_USER_BTN], NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
-#endif
-  // Запасной путь пробуждения: воткнутый USB. Если кнопка или Reset не
-  // разбудят, кабель поднимет ноду без разборки корпуса.
-  pwrmgtWakeArmVbus();
+  nrf_gpio_cfg_input(g_ADigitalPinMap[PIN_USER_BTN], NRF_GPIO_PIN_PULLUP);
+  NRF_GPIOTE->CONFIG[0] =
+      ((uint32_t)GPIOTE_CONFIG_MODE_Event << GPIOTE_CONFIG_MODE_Pos) |
+      ((uint32_t)g_ADigitalPinMap[PIN_USER_BTN] << GPIOTE_CONFIG_PSEL_Pos) |
+      ((uint32_t)GPIOTE_CONFIG_POLARITY_HiToLo << GPIOTE_CONFIG_POLARITY_Pos);
+  NRF_GPIOTE->EVENTS_IN[0] = 0;
+  NRF_GPIOTE->INTENSET = GPIOTE_INTENSET_IN0_Msk;
 
-#ifdef DARKTEC_HIBERNATE_SAFE
-  // Экран уже погашен. Ждём кнопку до 10 минут, любое нажатие — перезагрузка.
-  Serial.println("HIB: SAFE wait, press button");
-  const uint32_t safe_started = millis();
-  while ((millis() - safe_started) < 600000UL) {
-    if (digitalRead(PIN_USER_BTN) == LOW) {
-      Serial.println("HIB: button pressed -> reboot");
-      delay(50);
-      NVIC_SystemReset();
+  // Тик выключаем: иначе WFE просыпается каждую миллисекунду и жрёт ток.
+  SysTick->CTRL &= ~SysTick_CTRL_TICKINT_Msk;
+
+  uint8_t sd_enabled = 0;
+  sd_softdevice_is_enabled(&sd_enabled);
+  for (;;) {
+    if (sd_enabled) {
+      sd_app_evt_wait();
+    } else {
+      __WFE();
     }
-    feedWatchdog();
-    delay(50);
+    if (digitalRead(PIN_USER_BTN) == LOW) {
+      NVIC_SystemReset();   // delay() здесь нельзя: SysTick уже остановлен
+    }
   }
-  Serial.println("HIB: 10 min timeout -> reboot");
-  NVIC_SystemReset();
-#endif
-
-#ifdef PIN_USER_BTN
-  // Что реально стоит в регистре конфигурации пина кнопки: SENSE=2 (низкий
-  // уровень) должен быть взведён, иначе SYSTEMOFF не проснётся.
-  Serial.printf("HIB: PIN_CNF[%d]=0x%08X (SENSE=%d)\n",
-                (int)g_ADigitalPinMap[PIN_USER_BTN],
-                (unsigned)NRF_GPIO->PIN_CNF[g_ADigitalPinMap[PIN_USER_BTN]],
-                (int)((NRF_GPIO->PIN_CNF[g_ADigitalPinMap[PIN_USER_BTN]] >> 16) & 3));
-#endif
-  Serial.printf("HIB: GPREGRET=0x%02X GPREGRET2=0x%02X RESETREAS=0x%08X\n",
-                (unsigned)NRF_POWER->GPREGRET, (unsigned)NRF_POWER->GPREGRET2,
-                (unsigned)NRF_POWER->RESETREAS);
-
-#ifdef NRF52_POWER_MANAGEMENT
-  Serial.println("HIB: enterSystemOff");
-  Serial.flush();
-  enterSystemOff(SHUTDOWN_REASON_USER);
 #else
   NRF52Board::powerOff();
 #endif
