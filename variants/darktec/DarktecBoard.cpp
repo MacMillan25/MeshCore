@@ -303,6 +303,11 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
     radio_spi_test(reply, 300);
     return true;
   }
+  if (memcmp(command, "lr2021 tx", 9) == 0) {
+    const int n = atoi(&command[9]);
+    radio_tx_test((uint8_t)((n < 1 || n > 10) ? 1 : n), reply, 300);
+    return true;
+  }
   if (memcmp(command, "lr2021", 6) == 0) {
     radio_diag(reply, 300);
     return true;

@@ -51,3 +51,6 @@ void radio_scan(uint8_t seconds, char* reply, size_t len);
 
 // `lr2021 spi` — 200 чтений версии чипа: проверка целостности линии SPI.
 void radio_spi_test(char* reply, size_t len);
+
+// `lr2021 tx [n]` — передать n сырых пакетов и посчитать, доходит ли TX_DONE.
+void radio_tx_test(uint8_t count, char* reply, size_t len);

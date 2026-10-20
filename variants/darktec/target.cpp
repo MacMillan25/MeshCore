@@ -166,6 +166,53 @@ void radio_spi_test(char* reply, size_t len) {
            (unsigned)ref_maj, (unsigned)ref_min, bad, all_ff, errs, (int)LORA_SPI_HZ);
 }
 
+// `lr2021 tx [n]` — передать n сырых пакетов в обход меша и посмотреть,
+// доходит ли чип до TX_DONE. Если TX_DONE есть, а никто не слышит — виноват
+// тракт (антенна, порт, PA), а не прошивка.
+void radio_tx_test(uint8_t count, char* reply, size_t len) {
+  if (count < 1) count = 1;
+  if (count > 10) count = 10;
+
+  static const uint8_t pkt[10] = { 'L', 'R', '2', '0', '2', '1', 'T', 'E', 'S', 'T' };
+
+  uint8_t ok = 0, fail = 0, noirq = 0;
+  int16_t last_err = 0;
+
+  for (uint8_t i = 0; i < count; i++) {
+    radio.standby();
+    radio.clearIrqFlags(0xFFFFFFFF);
+    last_err = radio.startTransmit((uint8_t*)pkt, sizeof(pkt));
+    if (last_err != RADIOLIB_ERR_NONE) {
+      fail++;
+      continue;
+    }
+
+    const uint32_t end = millis() + 2000;
+    bool done = false, timeout = false;
+    while ((int32_t)(millis() - end) < 0) {
+      const uint32_t irq = radio.getIrqFlags();
+      if (irq & RADIOLIB_LR2021_IRQ_TX_DONE) { done = true; break; }
+      if (irq & RADIOLIB_LR2021_IRQ_TIMEOUT) { timeout = true; break; }
+      delay(1);
+    }
+    if (done) {
+      ok++;
+    } else {
+      fail++;
+      if (!timeout) noirq++;
+    }
+    radio.finishTransmit();
+    delay(60);
+  }
+
+  radio.standby();
+  radio.startReceive();
+
+  snprintf(reply, len, "tx n=%u ok=%u fail=%u noirq=%u e=%d",
+           (unsigned)count, (unsigned)ok, (unsigned)fail, (unsigned)noirq,
+           (int)last_err);
+}
+
 mesh::LocalIdentity radio_new_identity() {
   RadioNoiseListener rng(radio);
   return mesh::LocalIdentity(&rng);  // новая случайная идентичность

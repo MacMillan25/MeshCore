@@ -3,6 +3,10 @@
 #include <helpers/radiolib/CustomLR2021Wrapper.h>
 #include "DarktecBoard.h"
 
+#ifndef DARKTEC_LR2021_POLL_IRQ
+#define DARKTEC_LR2021_POLL_IRQ 0
+#endif
+
 /*
  * LR2021 на плате DarkTec (тестовая сборка).
  *
@@ -62,12 +66,18 @@ public:
   uint32_t getStatIrq() const { return _st_irq; }
 
   // Опрос статуса вместо прерывания: поднимаем флаг приёма/передачи сами.
+  // По умолчанию ВЫКЛЮЧЕН: на этой плате прерывание от модуля доходит до MCU
+  // (на прошивке до опроса поймали пакет), а второй потребитель флагов только
+  // мешает — ISR и опрос дерутся за одни и те же биты, и чтение идёт по мусору.
+  // Включается флагом сборки -D DARKTEC_LR2021_POLL_IRQ=1.
   bool pollPacketFlag() override {
+#if DARKTEC_LR2021_POLL_IRQ
     const uint32_t irq = lr()->getIrqFlags();
     if (irq & (RADIOLIB_LR2021_IRQ_RX_DONE | RADIOLIB_LR2021_IRQ_TX_DONE)) {
       _st_poll++;
       return true;
     }
+#endif
     return false;
   }
 
