@@ -5,6 +5,7 @@
 
 #include "DarktecBoard.h"
 #include "DarktecPrefs.h"
+#include "DarktecFactoryCfg.h"
 #include <helpers/LowBattGuard.h>
 
 // Фасад для BatteryPack: позволяет ядровому оверлею получить SOC нашей модели,
@@ -120,6 +121,9 @@ void DarktecBoard::begin() {
     // объект радио уже создан.
     g_power_board = this;
     DarktecPrefs::begin();
+    // Блок заводских настроек: обращение к нему держит секцию в образе
+    // (иначе --gc-sections её выбрасывает). Чтение появится отдельным шагом.
+    (void)DarktecFactoryCfg::blob();
     const DarktecPrefsFormat::Settings& p = DarktecPrefs::get();
     // Порог отключения по низкому напряжению применяем сразу: проверка батареи
     // в main() идёт уже после board.begin(), поэтому стендовое значение из
