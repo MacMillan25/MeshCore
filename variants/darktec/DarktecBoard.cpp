@@ -113,7 +113,7 @@ bool DarktecBoard::applyFactoryConfig(NodePrefs& prefs) {
 // в этом режиме не поднимается по кнопке — значит виснет НЕ сон, а код
 // выключения. Каждая стадия пишется в Serial, чтобы было видно, где встали.
 // После проверки вернуть SYSTEMOFF (раскомментировать блок ниже).
-#define DARKTEC_HIBERNATE_SAFE 1
+// #define DARKTEC_HIBERNATE_SAFE 1
 
 void DarktecBoard::powerOff() {
   Serial.println("HIB: start");
@@ -158,8 +158,21 @@ void DarktecBoard::powerOff() {
   NVIC_SystemReset();
 #endif
 
+#ifdef PIN_USER_BTN
+  // Что реально стоит в регистре конфигурации пина кнопки: SENSE=2 (низкий
+  // уровень) должен быть взведён, иначе SYSTEMOFF не проснётся.
+  Serial.printf("HIB: PIN_CNF[%d]=0x%08X (SENSE=%d)\n",
+                (int)g_ADigitalPinMap[PIN_USER_BTN],
+                (unsigned)NRF_GPIO->PIN_CNF[g_ADigitalPinMap[PIN_USER_BTN]],
+                (int)((NRF_GPIO->PIN_CNF[g_ADigitalPinMap[PIN_USER_BTN]] >> 16) & 3));
+#endif
+  Serial.printf("HIB: GPREGRET=0x%02X GPREGRET2=0x%02X RESETREAS=0x%08X\n",
+                (unsigned)NRF_POWER->GPREGRET, (unsigned)NRF_POWER->GPREGRET2,
+                (unsigned)NRF_POWER->RESETREAS);
+
 #ifdef NRF52_POWER_MANAGEMENT
   Serial.println("HIB: enterSystemOff");
+  Serial.flush();
   enterSystemOff(SHUTDOWN_REASON_USER);
 #else
   NRF52Board::powerOff();
@@ -210,7 +223,11 @@ void DarktecBoard::begin() {
     // объект радио уже создан.
     g_power_board = this;
     DarktecPrefs::begin();
-    // Блок заводских настроек: обращение к нему держит секцию в образе
+    // Диагностика: почему включились (RESETPIN / OFF / BOR / SREQ …).
+  Serial.printf("BOOT: RESETREAS=0x%08X GPREGRET2=0x%02X\n",
+                (unsigned)NRF_POWER->RESETREAS, (unsigned)NRF_POWER->GPREGRET2);
+
+  // Блок заводских настроек: обращение к нему держит секцию в образе
     // (иначе --gc-sections её выбрасывает). Чтение появится отдельным шагом.
     (void)DarktecFactoryCfg::blob();
     const DarktecPrefsFormat::Settings& p = DarktecPrefs::get();
