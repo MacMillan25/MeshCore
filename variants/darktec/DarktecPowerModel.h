@@ -53,6 +53,12 @@ static const uint32_t ETA_MINUTES_CAP = 200000UL;
 
 // Ток пакета, ниже которого заряд не считаем: INA3221 шумит на десятки мА.
 static const float CHARGE_DETECT_MA = 20.0f;
+// Хвост заряда (ток ниже 150 мА) не прогнозируем: последние ~100 мАч
+// заливаются часами, и любой прогноз там только врёт. Совпадает с порогом
+// «вилки» в DarktecBoard (DARKTEC_CHARGE_ICON_OFF_MA).
+static const float CHARGE_TAIL_MA = 150.0f;
+// Минимум для среднего тока в ETA: не даём прогнозу раздуться на спаде.
+static const float CHARGE_ETA_MIN_MA = 150.0f;
 
 // Сглаживание показаний. Замеры идут раз в 250 мс, а АЦП шумит на пару
 // милливольт — в полке кривой это доли процента, но остаток и ETA от них
@@ -124,20 +130,43 @@ public:
     _batt_current_ma = batt_current_ma;
     _ocv_mv = ocvFromTerminalPolar(batt_mv, batt_current_ma);
 
-    // Процент по кривой — и сразу сглаженный: одиночный шумный замер не должен
-    // дёргать остаток в мАч и ETA.
     const float soc_now = socFromVoltage(_ocv_mv);
     if (!_soc_valid) {
       _soc = soc_now;
       _soc_valid = true;
+    }
+
+    if (charging) {
+      const float i_ma = signedChargeCurrentMa(batt_current_ma);
+      if (!_charge_track) {
+        // Начало заряда: запоминаем остаток по текущему проценту и дальше
+        // живём только счётом кулонов.
+        _charge_mah = _capacity_mah * _soc / 100.0f;
+        _charge_start_mah = _charge_mah;
+        _charge_start_ms = now_ms;
+        _charge_track = true;
+        _charge_last_ms = now_ms;
+      } else {
+        const uint32_t dt = now_ms - _charge_last_ms;
+        _charge_last_ms = now_ms;
+        // Защита от скачков времени и от долгих пауз: не больше минуты за тик.
+        if (dt > 0 && dt <= 60000) {
+          _charge_mah += i_ma * ((float)dt / 3600000.0f);
+        }
+        if (_charge_mah > _capacity_mah) _charge_mah = _capacity_mah;
+      }
+      _soc = _capacity_mah > 0.0f ? _charge_mah * 100.0f / _capacity_mah : _soc;
     } else {
+      _charge_track = false;
+      // Разряд: процент по кривой, сглаженный. Одиночный шумный замер не
+      // должен дёргать остаток в мАч и ETA.
       _soc += (soc_now - _soc) * SOC_SMOOTH_ALPHA;
     }
 
     // ETA и ETA заряда пересчитываются здесь же, чтобы UI читал готовое
     // значение и не считал цикл на каждой отрисовке.
     smoothEta();
-    smoothChargeEta();
+    smoothChargeEta(now_ms);
   }
 
   bool isCharging() const { return _charging; }
@@ -242,22 +271,28 @@ private:
     return minutes;
   }
 
-  float computeChargeEtaMinutes() const {
-    if (!_soc_valid || !_charging) return 0.0f;
+  // Остаток пути до полного, делённый на текущий ток заряда. Остаток ведётся
+  // кулоновским счётом от момента подключения зарядника, поэтому CV-фазу
+  // (ток падает) формула отрабатывает сама: числитель уменьшается, знаменатель
+  // тоже, и прогноз не приходится растягивать коэффициентами.
+  float computeChargeEtaMinutes(uint32_t now_ms) const {
+    if (!_soc_valid || !_charging || !_charge_track) return 0.0f;
     const float i_ma = signedChargeCurrentMa(_batt_current_ma);
-    if (i_ma < CHARGE_DETECT_MA) return 0.0f;
-    const float soc = _soc;
-    if (soc >= 99.5f) return 0.0f;
+    if (i_ma < CHARGE_TAIL_MA) return 0.0f;      // вилка: заливка закончилась
+    const float remain_mah = _capacity_mah - _charge_mah;
+    if (remain_mah <= 0.0f) return 0.0f;
 
-    const float remain_mah = _capacity_mah * (100.0f - soc) / 100.0f;
-    float minutes = remain_mah / i_ma * 60.0f;
-
-    // CV-фаза: после 80% зарядник держит напряжение и ток спадает, поэтому
-    // линейный прогноз занижает время. Коэффициент растёт от 1 до 5.
-    if (soc > 80.0f) {
-      minutes *= 1.0f + 4.0f * (soc - 80.0f) / 20.0f;
+    // Средний ток за сессию, а не мгновенный: на CV мгновенный падает и даёт
+    // скачок прогноза вверх (14 -> 44 минуты). Средний меняется плавно.
+    float i_eta = i_ma;
+    const float elapsed_h = (float)(now_ms - _charge_start_ms) / 3600000.0f;
+    const float charged_mah = _charge_mah - _charge_start_mah;
+    if (elapsed_h > 0.03f && charged_mah > 1.0f) {
+      const float i_avg = charged_mah / elapsed_h;
+      if (i_avg > i_eta) i_eta = i_avg;
     }
-    return minutes;
+    if (i_eta < CHARGE_ETA_MIN_MA) i_eta = CHARGE_ETA_MIN_MA;
+    return remain_mah / i_eta * 60.0f;
   }
 
   // Сглаживание ETA: экспонента плюс ограничение прыжка за тик.
@@ -276,13 +311,13 @@ private:
     if (_eta_smooth < 0.0f) _eta_smooth = 0.0f;
   }
 
-  void smoothChargeEta() {
+  void smoothChargeEta(uint32_t now_ms) {
     if (!_charging) {
       _charge_eta_smooth = 0.0f;
       _charge_eta_valid = false;
       return;
     }
-    const float raw = computeChargeEtaMinutes();
+    const float raw = computeChargeEtaMinutes(now_ms);
     if (!_charge_eta_valid) {
       _charge_eta_smooth = raw;
       _charge_eta_valid = true;
@@ -300,6 +335,15 @@ private:
   float    _soc = 100.0f;
   bool     _soc_valid = false;
   bool     _charging = false;
+  // Кулоновский счёт во время заряда: остаток фиксируется на старте заряда и
+  // дальше только прибавляется по измеренному току. Напряжение банки под
+  // зарядом врёт (2 А поднимают клеммы почти до 4.2 В), поэтому процент и
+  // остаток в это время берутся отсюда, а не из кривой.
+  bool     _charge_track = false;
+  uint32_t _charge_last_ms = 0;
+  uint32_t _charge_start_ms = 0;     // начало сессии заряда (для среднего тока)
+  float    _charge_mah = 0.0f;       // накопленный остаток
+  float    _charge_start_mah = 0.0f; // остаток на момент подключения зарядника
   bool     _invert_current = false;
   bool     _polarity_known = false;
   float    _batt_current_ma = 0.0f;

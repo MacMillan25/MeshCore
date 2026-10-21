@@ -4,6 +4,10 @@
 #include <Arduino.h>
 #include <helpers/NRF52Board.h>
 
+// Общий тип настроек ядра. Только объявление: в simple_secure_chat свой
+// NodePrefs, и подключать сюда helpers/NodePrefs.h нельзя — будет редукция.
+struct NodePrefs;
+
 // Пины по фактической распайке модуля LR2021 (20.10.2026). Номера слева —
 // Arduino-пины, справа — нога nRF и её номер из g_ADigitalPinMap (variant.cpp).
 #define P_LORA_SCLK  13 //P1.13 45
@@ -17,6 +21,7 @@
 
 /*
  * Радио: LR2021 (тестовая сборка на плате DarkTec).
+
  *
  *   SCK P1.13, NSS P1.11, MOSI P0.02, MISO P0.09
  *   RESET P0.29, BUSY P1.15, IRQ P0.10
@@ -66,11 +71,15 @@
 #ifndef DARKTEC_CHARGE_DETECT_V
 #define DARKTEC_CHARGE_DETECT_V 4.5f
 #endif
-// Порог тока CHRG для индикатора на экране: выше — идёт заряд (молния), ниже —
-// заряд закончился и зарядник держит подпитку (вилка). Напряжение CHRG при этом
-// всё равно должно быть выше DARKTEC_CHARGE_DETECT_V, иначе иконки нет.
+// Порог тока пакета (канал BATT) для индикатора на экране: выше — идёт заряд
+// (молния), ниже — заливка закончилась и зарядник держит подпитку (вилка).
+// Напряжение CHRG при этом всё равно должно быть выше DARKTEC_CHARGE_DETECT_V,
+// иначе иконки нет.
 #ifndef DARKTEC_CHARGE_ICON_MA
-#define DARKTEC_CHARGE_ICON_MA 50.0f
+#define DARKTEC_CHARGE_ICON_MA 165.0f       // выше — загорается молния (идёт заряд)
+#endif
+#ifndef DARKTEC_CHARGE_ICON_OFF_MA
+#define DARKTEC_CHARGE_ICON_OFF_MA 150.0f   // ниже — возвращается вилка (заливка кончилась)
 #endif
 
 // Тик интегрирования тока. Не привязан к обновлению экрана: счётчик живёт в
@@ -142,6 +151,7 @@ protected:
   float    _charge_mah = 0.0f;        // mAh poured into the pack this session
   bool     _charger_present = false;
   uint8_t  _charge_icon = 0;   // 0 нет / 1 молния / 2 вилка
+  bool     _factory_radio_changed = false;  // заводские настройки поменяли радио
   uint32_t _charge_last_ms = 0;
   uint32_t _charge_session_ms = 0;
   uint32_t _full_hold_ms = 0;         // сколько ток заряда держится ниже порога
@@ -319,6 +329,13 @@ public:
 
   // Hibernate / CLI: SYSTEMOFF. Защита батареи — ADC-wait в initiateShutdown.
   void powerOff() override;
+  // Переносит заводские настройки из блока в образе в prefs (один раз на
+  // сборку). true — что-то применили, вызывающий должен сохранить NodePrefs.
+  // Радио-параметры применяет вызывающий: у платы нет доступа к radio_driver.
+  // Звать только там, где используется общий helpers/NodePrefs.h (compаньон,
+  // репитер, комната, сенсор); в simple_secure_chat и KISS свой набор полей.
+  bool applyFactoryConfig(NodePrefs& prefs);
+  bool factoryRadioChanged() const { return _factory_radio_changed; }
 
   // CLI-команды DarkTec. Компаньон разбирает команды сам и до CommonCLI
   // не доходит, поэтому держим их здесь — работает у всех ролей.

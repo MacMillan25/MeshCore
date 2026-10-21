@@ -70,6 +70,24 @@ def find_uf2(env, version):
     raise SystemExit(f"Нет UF2 для {env} версии {version} — сначала собери скриптом build-darktec-uf2.ps1")
 
 
+def find_zip(env, version):
+    """DFU-пакет для обновления по воздуху (bootloader OTAFIX / Nordic DFU).
+
+    Свежий пакет всегда лежит в .pio/build/<env>/firmware.zip — его делает
+    обычная сборка `pio run -e <env>`. Цель `-t create_uf2` его НЕ создаёт.
+    Если свежего нет, берём готовую копию из out/uf2 (там имя содержит хеш).
+    """
+    fresh = os.path.join(".pio", "build", env, "firmware.zip")
+    if os.path.exists(fresh):
+        return fresh
+    out = os.path.join("out", "uf2")
+    if os.path.isdir(out):
+        for name in os.listdir(out):
+            if name.startswith(env) and version in name and name.endswith(".zip"):
+                return os.path.join(out, name)
+    raise SystemExit(f"Нет DFU-zip для {env} — собери `pio run -e {env}` (без -t create_uf2)")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", required=True, help="1.18.0d3")
@@ -118,6 +136,19 @@ def main():
             data = f.read()
         asset = api(f"{UPLOADS}/releases/{rel['id']}/assets?name={env}.uf2",
                     data=data, content_type="application/octet-stream")
+        print(f"  загружен {asset['name']} ({asset['size']} байт)")
+
+    # DFU-пакеты для обновления по воздуху: их берёт приложение и bootloader
+    # OTAFIX (Nordic DFU). Имя как у апстрима — <env>-v<версия>-<хеш>.zip.
+    short = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True).stdout.strip()
+    for env in ENVS:
+        zpath = find_zip(env, args.version)
+        with open(zpath, "rb") as f:
+            zdata = f.read()
+        zname = f"{env}-v{args.version}-{short}.zip"
+        asset = api(f"{UPLOADS}/releases/{rel['id']}/assets?name={zname}",
+                    data=zdata, content_type="application/octet-stream")
         print(f"  загружен {asset['name']} ({asset['size']} байт)")
 
     print("готово:", rel["html_url"])

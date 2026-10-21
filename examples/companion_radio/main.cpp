@@ -545,6 +545,21 @@ void setup() {
   #endif
   store.begin();
   the_mesh.begin();
+
+#ifdef DARKTEC
+  // Заводские настройки из образа: применяем один раз (второй раз блок
+  // игнорируется по CRC в prefs). Радио перестраиваем сразу, без перезагрузки.
+  {
+    NodePrefs* np = the_mesh.getNodePrefs();
+    if (board.applyFactoryConfig(*np)) {
+      the_mesh.savePrefs();
+      if (board.factoryRadioChanged()) {
+        radio_driver.setParams(np->freq, np->bw, np->sf, np->cr);
+        radio_driver.setTxPower(np->tx_power_dbm);
+      }
+    }
+  }
+#endif
 #elif defined(RP2040_PLATFORM)
   LittleFS.begin();
   store.begin();

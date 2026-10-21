@@ -6,6 +6,8 @@
 #include "DarktecBoard.h"
 #include "DarktecPrefs.h"
 #include "target.h"
+#include "DarktecFactoryCfg.h"
+#include <helpers/NodePrefs.h>
 #include <helpers/LowBattGuard.h>
 
 // Фасад для BatteryPack: позволяет ядровому оверлею получить SOC нашей модели,
@@ -54,11 +56,79 @@ void DarktecBoard::initiateShutdown(uint8_t reason) {
 }
 #endif
 
+
+bool DarktecBoard::applyFactoryConfig(NodePrefs& prefs) {
+  DarktecFactoryCfg::Payload p;
+  const auto* blob = DarktecFactoryCfg::blob();
+  if (!DarktecFactoryCfg::isValid(blob, p)) return false;
+  if (p.flags == 0) return false;
+
+  DarktecPrefsFormat::Settings s = DarktecPrefs::get();
+  // Один и тот же блок применяем ровно один раз: CRC запоминаем в prefs.
+  if (s.factory_crc == blob->crc32) return false;
+
+  bool changed = false;
+
+  if (p.flags & DarktecFactoryCfg::FLAG_NAME) {
+    p.name[sizeof(p.name) - 1] = 0;
+    if (p.name[0] != 0) {
+      strncpy(prefs.node_name, (const char*)p.name, sizeof(prefs.node_name) - 1);
+      prefs.node_name[sizeof(prefs.node_name) - 1] = 0;
+      changed = true;
+    }
+  }
+
+  if (p.flags & DarktecFactoryCfg::FLAG_RADIO) {
+    prefs.freq = p.freq;
+    prefs.bw = p.bw;
+    prefs.sf = p.sf;
+    prefs.cr = p.cr;
+    prefs.tx_power_dbm = p.tx_dbm;
+    _factory_radio_changed = true;
+    _pm.setTxPowerDbm(p.tx_dbm);
+    changed = true;
+  }
+
+  if (p.flags & DarktecFactoryCfg::FLAG_CAPACITY) {
+    s.capacity_mode = p.capacity_mode;
+    s.capacity_mah = p.capacity_mah;
+    _pm.setCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(s));
+    changed = true;
+  }
+
+  if (p.flags & DarktecFactoryCfg::FLAG_MODULE) {
+    // В этой сборке модуль не выбирается: узел всегда на LR2021. Байт храним
+    // ради совместимости формата, на тракт и модель питания он не влияет.
+    s.module = p.module;
+    changed = true;
+  }
+
+  // CRC записываем всегда, даже если флаги ничего не поменяли: иначе блок
+  // будет применяться на каждом старте.
+  s.factory_crc = blob->crc32;
+  DarktecPrefs::save(s);
+  return changed;
+}
+
+// ДИАГНОСТИКА ГИБЕРНАЦИИ (тестовая сборка d8).
+// Вместо SYSTEMOFF уходим в обычное ожидание с погашенным экраном: если нода и
+// в этом режиме не поднимается по кнопке — значит виснет НЕ сон, а код
+// выключения. Каждая стадия пишется в Serial, чтобы было видно, где встали.
+// После проверки вернуть SYSTEMOFF (раскомментировать блок ниже).
+// #define DARKTEC_HIBERNATE_SAFE 1
+
 void DarktecBoard::powerOff() {
-  // Hibernate / CLI — SYSTEMOFF, как у Rogovogor.
-  // ADC-wait только для защиты батареи (initiateShutdown LOW_VOLTAGE/BOOT_PROTECT).
+  // Гибернация. SYSTEMOFF сознательно НЕ используем: в нём разбудить чип можно
+  // только по GPIO-детекту, LPCOMP, NFC или VBUS, а pin-reset оттуда не
+  // поднимает — а нам нужно, чтобы нода включалась именно кнопкой RST.
+  // Поэтому гасим периферию, выключаем тик и спим в WFE с живым ядром:
+  // так работают оба пути (RST — обычный сброс, BTN — событие GPIOTE),
+  // а потребление остаётся низким: тактирование и радио выключены.
 #ifdef PIN_USER_BTN
-  while (digitalRead(PIN_USER_BTN) == LOW) {
+  // Ждём отпускания кнопки, но не бесконечно: залипший LOW раньше подвешивал
+  // ноду здесь навсегда.
+  const uint32_t wait_started = millis();
+  while (digitalRead(PIN_USER_BTN) == LOW && (millis() - wait_started) < 5000) {
     delay(10);
   }
 #endif
@@ -66,12 +136,54 @@ void DarktecBoard::powerOff() {
   shutdownPeripherals();
   digitalWrite(RADIO_POWER_EN, LOW);
 
-#ifdef PIN_USER_BTN
-  nrf_gpio_cfg_sense_input(g_ADigitalPinMap[PIN_USER_BTN], NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
-#endif
+  // Гасим BLE-стек. Без этого SoftDevice будит ядро на каждый интервал
+  // рекламы и держит радио включённым — в замере гибернация жрала 38 мА
+  // вместо единиц. После выключения стека живём на голом WFE.
+  uint8_t sd_enabled = 0;
+  sd_softdevice_is_enabled(&sd_enabled);
+  if (sd_enabled) {
+    sd_softdevice_disable();
+    sd_enabled = 0;
+  }
+  MESH_DEBUG_PRINTLN("HIB: BLE stack stopped");
 
-#ifdef NRF52_POWER_MANAGEMENT
-  enterSystemOff(SHUTDOWN_REASON_USER);
+#ifdef PIN_USER_BTN
+#  ifndef DARKTEC_HIBERNATE_BTN_WAKE
+#    define DARKTEC_HIBERNATE_BTN_WAKE 1   // 0 — кнопка спящую ноду не будит
+#  endif
+
+  // Тик выключаем: иначе WFE просыпается каждую миллисекунду и жрёт ток.
+  SysTick->CTRL &= ~SysTick_CTRL_TICKINT_Msk;
+
+#  if DARKTEC_HIBERNATE_BTN_WAKE
+  nrf_gpio_cfg_input(g_ADigitalPinMap[PIN_USER_BTN], NRF_GPIO_PIN_PULLUP);
+  NRF_GPIOTE->CONFIG[0] =
+      ((uint32_t)GPIOTE_CONFIG_MODE_Event << GPIOTE_CONFIG_MODE_Pos) |
+      ((uint32_t)g_ADigitalPinMap[PIN_USER_BTN] << GPIOTE_CONFIG_PSEL_Pos) |
+      ((uint32_t)GPIOTE_CONFIG_POLARITY_HiToLo << GPIOTE_CONFIG_POLARITY_Pos);
+  NRF_GPIOTE->EVENTS_IN[0] = 0;
+  NRF_GPIOTE->INTENSET = GPIOTE_INTENSET_IN0_Msk;
+
+  for (;;) {
+    if (sd_enabled) {
+      sd_app_evt_wait();
+    } else {
+      __WFE();
+    }
+    if (digitalRead(PIN_USER_BTN) == LOW) {
+      NVIC_SystemReset();   // delay() здесь нельзя: SysTick уже остановлен
+    }
+  }
+#  else
+  // Тест: кнопка не будит, поднимает только RST.
+  for (;;) {
+    if (sd_enabled) {
+      sd_app_evt_wait();
+    } else {
+      __WFE();
+    }
+  }
+#  endif
 #else
   NRF52Board::powerOff();
 #endif
@@ -117,6 +229,13 @@ void DarktecBoard::begin() {
     // Настройки DarkTec: из них берутся ёмкость пакета и порог отключения.
     g_power_board = this;
     DarktecPrefs::begin();
+    // Диагностика: почему включились (RESETPIN / OFF / BOR / SREQ …).
+  Serial.printf("BOOT: RESETREAS=0x%08X GPREGRET2=0x%02X\n",
+                (unsigned)NRF_POWER->RESETREAS, (unsigned)NRF_POWER->GPREGRET2);
+
+  // Блок заводских настроек: обращение к нему держит секцию в образе
+    // (иначе --gc-sections её выбрасывает). Чтение появится отдельным шагом.
+    (void)DarktecFactoryCfg::blob();
     const DarktecPrefsFormat::Settings& p = DarktecPrefs::get();
     // Порог отключения по низкому напряжению применяем сразу: проверка батареи
     // в main() идёт уже после board.begin(), поэтому стендовое значение из
@@ -185,13 +304,25 @@ void DarktecBoard::loop() {
   }
   bool present = (chrg_v > DARKTEC_CHARGE_DETECT_V);
 
-  // Индикатор на экране: пока шина CHRG под напряжением, смотрим на её ток.
-  // Выше порога — идёт заряд (молния), ниже — заряд закончился, зарядник просто
-  // держит подпитку (вилка). Считаем здесь же: замер напряжения уже сделан.
+  // Индикатор на экране: зарядник есть (шина CHRG под напряжением), а идёт ли
+  // заряд — смотрим по току ПАКЕТА, канал BATT. Выше порога — молния, ниже —
+  // заливка закончилась, зарядник просто держит подпитку (вилка).
+  // Ток берём по модулю: знак зависит от полярности шунта на конкретной плате,
+  // а индикатору важно только «идёт заряд или нет».
   if (present) {
-    float chrg_a = _ina.getCurrentAmps(DARKTEC_INA_CHARGE_CH);
-    float chrg_ma = isnan(chrg_a) ? 0.0f : chrg_a * 1000.0f;
-    _charge_icon = (chrg_ma > DARKTEC_CHARGE_ICON_MA) ? 1 : 2;
+    float batt_a = _ina.getCurrentAmps(DARKTEC_INA_BATT_CH);
+    float batt_ma = isnan(batt_a) ? 0.0f : fabsf(batt_a) * 1000.0f;
+    // Гистерезис 15 мА: молния — выше 165 мА, вилка — ниже 150 мА. Без запаса
+    // значок дребезжал на границе: ток плавает на ±10 мА.
+    const float on_ma = DARKTEC_CHARGE_ICON_MA;
+    const float off_ma = DARKTEC_CHARGE_ICON_OFF_MA;
+    if (batt_ma > on_ma) {
+      _charge_icon = 1;
+    } else if (batt_ma < off_ma) {
+      _charge_icon = 2;
+    } else if (_charge_icon == 0) {
+      _charge_icon = 2;   // зарядник только что подключили, ток ещё не нарос
+    }
   } else {
     _charge_icon = 0;
   }

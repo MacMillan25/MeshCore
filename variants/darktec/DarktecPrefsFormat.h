@@ -37,6 +37,7 @@ struct Settings {
   uint8_t brightness;     // BrightnessLevel: 0=Dim, 1=Normal, 2=Bright
   uint8_t bar_value;      // BarValue: что показывать в мини-баре заставки
   uint8_t low_batt_mv100; // порог отключения по низкому напряжению, в 100 мВ; 0 = штатный 3.40 В
+  uint32_t factory_crc;   // CRC32 применённого блока заводских настроек (0 = не применяли)
 };
 
 // Что показывать в мини-баре заставки «Always On».
@@ -152,7 +153,11 @@ inline size_t serialize(const Settings& s, uint8_t* buf, size_t len) {
   buf[11] = t.brightness;
   buf[12] = t.bar_value;
   buf[13] = t.low_batt_mv100;
-  for (int i = 0; i < 4; i++) buf[14 + i] = 0x00;
+  // Байты 14..17 — CRC32 применённого блока заводских настроек.
+  buf[14] = (uint8_t)(t.factory_crc & 0xFF);
+  buf[15] = (uint8_t)((t.factory_crc >> 8) & 0xFF);
+  buf[16] = (uint8_t)((t.factory_crc >> 16) & 0xFF);
+  buf[17] = (uint8_t)((t.factory_crc >> 24) & 0xFF);
   const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
   buf[18] = (uint8_t)(crc & 0xFF);
   buf[19] = (uint8_t)(crc >> 8);
@@ -228,6 +233,8 @@ inline bool parseV4(const uint8_t* buf, size_t len, Settings& out) {
   s.brightness = buf[11];
   s.bar_value = buf[12];
   s.low_batt_mv100 = buf[13];
+  s.factory_crc = (uint32_t)buf[14] | ((uint32_t)buf[15] << 8) |
+                  ((uint32_t)buf[16] << 16) | ((uint32_t)buf[17] << 24);
   sanitize(s);
   out = s;
   return true;

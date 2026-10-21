@@ -64,6 +64,11 @@ extern "C" void LPCOMP_COMP_IRQHandler(void) {
 // any C++ static constructors (default 65535)
 static void __attribute__((constructor(101))) nrf52_early_reset_capture() {
   g_nrf52_reset_reason = NRF_POWER->RESETREAS;
+  // Бутлоадер OTAFIX не чистит RESETREAS и просит приложение делать это самому.
+  // Без очистки флаг «нажали Reset» висит вечно, и бутлоадер вместе с магией в
+  // RAM уходит в DFU вместо приложения: нода выглядит выключенной и не
+  // реагирует ни на Reset, ни на кнопку (лечилось только снятием батареи).
+  NRF_POWER->RESETREAS = 0xFFFFFFFF;
   g_nrf52_shutdown_reason = NRF_POWER->GPREGRET2;
 }
 
@@ -382,9 +387,11 @@ float NRF52Board::getMCUTemperature() {
 void NRF52Board::shutdownPeripherals() {
   // Power off the display if any
 #ifdef DISPLAY_CLASS
-  if (display.isOn()) {
-    display.turnOff();
-  }
+  // Гасим панель всегда, не глядя на isOn(): в гибернации экран до этого
+  // успевает погаснуть логически, а OLED остаётся с включённым charge pump
+  // (это те самые ~20 мА в замере).
+  display.setContrast(0);
+  display.turnOff();
 #endif
   // Prep LoRa radio for power down
   #ifdef P_LORA_RESET
