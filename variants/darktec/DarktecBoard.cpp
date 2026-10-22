@@ -286,23 +286,24 @@ void DarktecBoard::loop() {
   }
 
   // Ток пакета нужен модели: по нему компенсируется падение на внутреннем
-  // сопротивлении, иначе во время заряда клеммы дают ложные 100%.
-  // Знак у INA3221: «+» разряд, «−» заряд.
+  // сопротивлении, считается кулоновский заряд и рисуется Inow на экране.
+  // Знак у INA3221 на разных платах разный, и модели он не нужен: заряд
+  // решается по шине CHRG плюс модуль тока.
   float batt_ma = 0.0f;
   {
     float a = _ina.getCurrentAmps(DARKTEC_INA_BATT_CH);
     if (!isnan(a)) batt_ma = a * 1000.0f;
   }
 
-  // Напряжение, ток и тишина в эфире — в модель.
-  _pm.update(getBattMilliVolts(), batt_ma, now, isLoRaActivity());
-  _pm.noteWindowTick(DARKTEC_CHARGE_TICK_MS);
-
+  // Шина CHRG: по ней понимаем, подключён ли зарядник. Её же смотрит иконка.
+  // Один замер на всё — лишний I2C на каждой секунде ни к чему.
   float chrg_v = _ina.getBusVoltage(DARKTEC_INA_CHARGE_CH);
-  if (isnan(chrg_v)) {
-    return;
-  }
-  bool present = (chrg_v > DARKTEC_CHARGE_DETECT_V);
+  const bool present = isnan(chrg_v) ? _charger_present
+                                     : (chrg_v > DARKTEC_CHARGE_DETECT_V);
+
+  // Напряжение, ток, тишина в эфире и присутствие зарядника — в модель.
+  _pm.update(getBattMilliVolts(), batt_ma, now, isLoRaActivity(), present);
+  _pm.noteWindowTick(DARKTEC_CHARGE_TICK_MS);
 
   // Индикатор на экране: зарядник есть (шина CHRG под напряжением), а идёт ли
   // заряд — смотрим по току ПАКЕТА, канал BATT. Выше порога — молния, ниже —
@@ -310,15 +311,14 @@ void DarktecBoard::loop() {
   // Ток берём по модулю: знак зависит от полярности шунта на конкретной плате,
   // а индикатору важно только «идёт заряд или нет».
   if (present) {
-    float batt_a = _ina.getCurrentAmps(DARKTEC_INA_BATT_CH);
-    float batt_ma = isnan(batt_a) ? 0.0f : fabsf(batt_a) * 1000.0f;
+    const float batt_abs = fabsf(batt_ma);
     // Гистерезис 15 мА: молния — выше 165 мА, вилка — ниже 150 мА. Без запаса
     // значок дребезжал на границе: ток плавает на ±10 мА.
     const float on_ma = DARKTEC_CHARGE_ICON_MA;
     const float off_ma = DARKTEC_CHARGE_ICON_OFF_MA;
-    if (batt_ma > on_ma) {
+    if (batt_abs > on_ma) {
       _charge_icon = 1;
-    } else if (batt_ma < off_ma) {
+    } else if (batt_abs < off_ma) {
       _charge_icon = 2;
     } else if (_charge_icon == 0) {
       _charge_icon = 2;   // зарядник только что подключили, ток ещё не нарос
@@ -343,14 +343,14 @@ void DarktecBoard::loop() {
 
   if (present) {
     if (dt > 0) {
-      float amps = _ina.getCurrentAmps(DARKTEC_INA_BATT_CH);
-      if (!isnan(amps) && amps > 0.0f) {
+      const float batt_abs = fabsf(batt_ma);
+      if (batt_abs > 0.0f) {
         // A * s / 3600 == mAh. Только счётчик сессии для страницы INA.
-        _charge_mah += amps * (float)dt / 3600.0f;
+        _charge_mah += batt_abs * (float)dt / 3600.0f;
         _charge_session_ms += dt;
       }
       // Долгий низкий ток при подключённом заряднике — банка взяла всё.
-      if (!isnan(amps) && amps * 1000.0f < DARKTEC_CHARGE_FULL_MA) {
+      if (batt_abs < DARKTEC_CHARGE_FULL_MA) {
         _full_hold_ms += dt;
       } else {
         _full_hold_ms = 0;
@@ -361,32 +361,11 @@ void DarktecBoard::loop() {
   _charger_present = present;
 }
 
-void DarktecBoard::pollChargeSense() {
-  uint32_t now = millis();
-  if (_ina_last_ms != 0 && (now - _ina_last_ms) < 250) {
-    return;
-  }
-  _ina_last_ms = now;
-
-  if (!readInaShuntReady()) {
-    return;
-  }
-
-  float amps = _ina.getCurrentAmps(DARKTEC_INA_CHARGE_CH);
-  if (isnan(amps)) {
-    return;
-  }
-  float ma = amps * 1000.0f;
-  if (_charging) {
-    _charging = ma > DARKTEC_CHARGE_OFF_MA;
-  } else {
-    _charging = ma > DARKTEC_CHARGE_ON_MA;
-  }
-}
-
 bool DarktecBoard::isCharging() {
-  pollChargeSense();
-  return _charging;
+  // «Зарядник подключён», а не «идёт заряд»: решение принимается по шине CHRG
+  // в loop(), туда же смотрит иконка. По току это врало, когда зарядник брал
+  // своё и ток уходил ниже порога, а знак шунта на разных платах разный.
+  return _charger_present;
 }
 
 bool DarktecBoard::isExternalPowered() {

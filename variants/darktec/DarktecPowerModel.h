@@ -96,85 +96,73 @@ public:
 
   // --- SOC ------------------------------------------------------------------
 
-  // Периодический вызов: подаёт напряжение в модель. Замер под нагрузкой
-  // игнорируется, пока в эфире была активность недавно.
-  // batt_current_ma — ток пакета от INA3221, знак БЕРЁМ КАК ЕСТЬ.
+  // Периодический вызов (раз в 250 мс): ток, состояние заряда и напряжение.
   //
-  // Знак у разных плат бывает разным, а угадывать его нельзя: ошибка знаком
-  // переворачивает компенсацию и уводит процент в противоположную сторону.
-  // Поэтому модель определяет полярность сама, один раз, по простому признаку:
-  // измеренное напряжение ВЫШЕ напряжения-по-кривой означает, что пакет
-  // заряжают, а не разряжают. Решение запоминается в _invert_current.
-  void update(uint16_t batt_mv, float batt_current_ma, uint32_t now_ms, bool radio_active) {
-    if (radio_active) {
-      _last_active_ms = now_ms;
+  // batt_current_ma — ток пакета от INA3221, знак БЕРЁМ КАК ЕСТЬ и ни на что
+  // его не тратим: у разных плат шунт впаян по-разному, а угадывание знака
+  // один раз при старте давало обратный результат, если нода включилась уже
+  // на зарядке. Отсюда и брались «CHG done» на разряде и «висящие 44 мА».
+  //
+  // Заряд определяется двумя независимыми признаками:
+  //   charger_present — напряжение шины CHRG выше порога (то же, по чему
+  //                     рисуется значок молнии/вилки);
+  //   |ток пакета|     — выше порога, значит в банку реально что-то льётся.
+  // Знак тока при этом не нужен вовсе.
+  void update(uint16_t batt_mv, float batt_current_ma, uint32_t now_ms,
+              bool radio_active, bool charger_present) {
+    // Ток и флаг заряда обновляем ВСЕГДА, даже когда в эфире трафик: экран и
+    // кулоновский счёт должны видеть свежий замер, а не застывшее число.
+    _batt_current_ma = batt_current_ma;
+    _current_known = true;
+
+    const float i_abs = fabsf(batt_current_ma);
+    // Состояние заряда держится, пока зарядник подключён: в конце заливки ток
+    // падает до нуля, и без защёлки экран прыгал бы с «CHG done» на разрядный
+    // прогноз и обратно на каждом мигании тока.
+    const bool charging = charger_present && (i_abs > CHARGE_DETECT_MA || _charging);
+    _charging = charging;
+
+    if (radio_active) _last_active_ms = now_ms;
+
+    if (charging) {
+      // Кулоновский счёт. Напряжение под зарядом врёт (2 А поднимают клеммы
+      // почти до 4.2 В), поэтому процент и остаток берутся из счётчика.
+      chargedTick(batt_mv, i_abs, now_ms);
+      smoothEta();
+      smoothChargeEta(now_ms);
       return;
     }
 
-    bool charging = signedChargeCurrentMa(batt_current_ma) > CHARGE_DETECT_MA;
+    // Зарядки нет: счётчик закрыт, прогноз заряда сброшен здесь же.
+    _charge_track = false;
 
-    // Во время заряда замер берётся сразу, не дожидаясь тишины: ток заряда и
-    // так перебивает любую передачу, а компенсация делает замер пригодным.
-    // В покое и на разряде ждём, пока эфир утихнет: под передачей 1.5 А
-    // клеммы просажены, а в полке кривой 3-5 мВ на 1% SOC.
-    if (!charging) {
-      if (_last_active_ms != 0 && (uint32_t)(now_ms - _last_active_ms) < OCV_QUIET_MS) {
-        return;
-      }
+    // Дальше — только напряжение покоя. Под передачей клеммы просажены
+    // (1.5 А), а в полке кривой 3-5 мВ на 1% SOC, поэтому замер под нагрузкой
+    // игнорируем, пока эфир не утихнет.
+    smoothEta();
+    smoothChargeEta(now_ms);
+    if (radio_active) return;
+    if (_last_active_ms != 0 && (uint32_t)(now_ms - _last_active_ms) < OCV_QUIET_MS) {
+      return;
     }
     if (batt_mv < 1500) return;   // явный мусор в замере
 
-    learnCurrentPolarity(batt_mv, batt_current_ma);
-
-    _charging = charging;
-    _batt_current_ma = batt_current_ma;
-    _ocv_mv = ocvFromTerminalPolar(batt_mv, batt_current_ma);
-
+    // Разряд: клеммы ниже напряжения банки, компенсация поднимает вверх.
+    _ocv_mv = ocvFromTerminal(batt_mv, -i_abs);
     const float soc_now = socFromVoltage(_ocv_mv);
     if (!_soc_valid) {
       _soc = soc_now;
       _soc_valid = true;
     }
-
-    if (charging) {
-      const float i_ma = signedChargeCurrentMa(batt_current_ma);
-      if (!_charge_track) {
-        // Начало заряда: запоминаем остаток по текущему проценту и дальше
-        // живём только счётом кулонов.
-        _charge_mah = _capacity_mah * _soc / 100.0f;
-        _charge_start_mah = _charge_mah;
-        _charge_start_ms = now_ms;
-        _charge_track = true;
-        _charge_last_ms = now_ms;
-      } else {
-        const uint32_t dt = now_ms - _charge_last_ms;
-        _charge_last_ms = now_ms;
-        // Защита от скачков времени и от долгих пауз: не больше минуты за тик.
-        if (dt > 0 && dt <= 60000) {
-          _charge_mah += i_ma * ((float)dt / 3600000.0f);
-        }
-        if (_charge_mah > _capacity_mah) _charge_mah = _capacity_mah;
-      }
-      _soc = _capacity_mah > 0.0f ? _charge_mah * 100.0f / _capacity_mah : _soc;
-    } else {
-      _charge_track = false;
-      // Разряд: процент по кривой, сглаженный. Одиночный шумный замер не
-      // должен дёргать остаток в мАч и ETA.
-      _soc += (soc_now - _soc) * SOC_SMOOTH_ALPHA;
-    }
-
-    // ETA и ETA заряда пересчитываются здесь же, чтобы UI читал готовое
-    // значение и не считал цикл на каждой отрисовке.
-    smoothEta();
-    smoothChargeEta(now_ms);
+    // Разряд: процент по кривой, сглаженный. Одиночный шумный замер не должен
+    // дёргать остаток в мАч и ETA.
+    _soc += (soc_now - _soc) * SOC_SMOOTH_ALPHA;
   }
 
   bool isCharging() const { return _charging; }
   float getBattCurrentMa() const { return _batt_current_ma; }
-
-  // Найдена ли полярность шунта (для диагностики).
-  bool isCurrentPolarityKnown() const { return _polarity_known; }
-  bool isCurrentPolarityInverted() const { return _invert_current; }
+  // Был ли хоть один замер тока: до первого замера UI нечего показывать.
+  bool isCurrentKnown() const { return _current_known; }
 
   bool hasSoc() const { return _soc_valid; }
   float getSocPercent() const { return _soc; }
@@ -277,7 +265,7 @@ private:
   // тоже, и прогноз не приходится растягивать коэффициентами.
   float computeChargeEtaMinutes(uint32_t now_ms) const {
     if (!_soc_valid || !_charging || !_charge_track) return 0.0f;
-    const float i_ma = signedChargeCurrentMa(_batt_current_ma);
+    const float i_ma = fabsf(_batt_current_ma);
     if (i_ma < CHARGE_TAIL_MA) return 0.0f;      // вилка: заливка закончилась
     const float remain_mah = _capacity_mah - _charge_mah;
     if (remain_mah <= 0.0f) return 0.0f;
@@ -344,8 +332,7 @@ private:
   uint32_t _charge_start_ms = 0;     // начало сессии заряда (для среднего тока)
   float    _charge_mah = 0.0f;       // накопленный остаток
   float    _charge_start_mah = 0.0f; // остаток на момент подключения зарядника
-  bool     _invert_current = false;
-  bool     _polarity_known = false;
+  bool     _current_known = false;
   float    _batt_current_ma = 0.0f;
   uint16_t _ocv_mv = 0;
   uint8_t  _module = MODULE_LR2021_1W;  // LR2021: замеров нет, таблицы от 33S
@@ -378,7 +365,9 @@ private:
 
   // Клеммы под током показывают не напряжение банки: 2 А заряда поднимают их
   // на ~0.5 В, и без компенсации нода радостно показывает 100% при 50%
-  // реальных. Отсюда V_разомкн = V_изм - I*R, где «+» разряд, «−» заряд.
+  // реальных. Отсюда V_разомкн = V_изм - I*R, где «+» — ток в пакет, «−» — из
+  // пакета. Знак берётся не из измерения, а из состояния заряда: под зарядом
+  // ток течёт внутрь, иначе наружу.
   // R и коэффициент подобраны по двум реальным кривым (см. генератор).
   static uint16_t ocvFromTerminal(uint16_t batt_mv, float current_ma) {
     float i_a = current_ma / 1000.0f;
@@ -387,31 +376,33 @@ private:
     return (uint16_t)(v + 0.5f);
   }
 
-  // Ток заряда в мА с «правильным» знаком: >0 значит льют в пакет.
-  float signedChargeCurrentMa(float raw_ma) const {
-    return _invert_current ? -raw_ma : raw_ma;
-  }
-
-  // То же приведение, но сразу для напряжения банки.
-  uint16_t ocvFromTerminalPolar(uint16_t batt_mv, float raw_ma) const {
-    return ocvFromTerminal(batt_mv, signedChargeCurrentMa(raw_ma));
-  }
-
-  // Один раз выясняем, какой знак у тока на этой плате.
-  //
-  // Считаем SOC двумя способами — как есть и с обратным током. Правильный
-  // тот, при котором компенсация уводит напряжение банки ВНИЗ, когда ток
-  // льют в пакет. Проще: если при обратном токе напряжение банки выходит
-  // выше измеренного, значит raw_ma — это ток заряда, и знак переворачиваем.
-  void learnCurrentPolarity(uint16_t batt_mv, float raw_ma) {
-    if (_polarity_known) return;
-    if (fabsf(raw_ma) < CHARGE_DETECT_MA) return;   // слишком мал, не решаем
-
-    float soc_raw = socFromVoltage(batt_mv);
-    float soc_inv = socFromVoltage(ocvFromTerminal(batt_mv, -raw_ma));
-
-    _invert_current = (soc_inv > soc_raw);
-    _polarity_known = true;
+  // Тик под зарядом: кулоновский счёт и процент из него.
+  void chargedTick(uint16_t batt_mv, float i_abs, uint32_t now_ms) {
+    if (!_soc_valid && batt_mv >= 1500) {
+      // Первый замер пришёл уже под зарядом: процент сеем по напряжению с
+      // компенсацией падения, иначе счётчик стартовал бы от 100%.
+      _ocv_mv = ocvFromTerminal(batt_mv, i_abs);
+      _soc = socFromVoltage(_ocv_mv);
+      _soc_valid = true;
+    }
+    if (!_charge_track) {
+      // Начало заряда: запоминаем остаток по текущему проценту и дальше
+      // живём только счётом кулонов.
+      _charge_mah = _capacity_mah * _soc / 100.0f;
+      _charge_start_mah = _charge_mah;
+      _charge_start_ms = now_ms;
+      _charge_track = true;
+      _charge_last_ms = now_ms;
+    } else {
+      const uint32_t dt = now_ms - _charge_last_ms;
+      _charge_last_ms = now_ms;
+      // Защита от скачков времени и от долгих пауз: не больше минуты за тик.
+      if (dt > 0 && dt <= 60000) {
+        _charge_mah += i_abs * ((float)dt / 3600000.0f);
+      }
+      if (_charge_mah > _capacity_mah) _charge_mah = _capacity_mah;
+    }
+    _soc = _capacity_mah > 0.0f ? _charge_mah * 100.0f / _capacity_mah : _soc;
   }
 
   // --- кривая ---------------------------------------------------------------

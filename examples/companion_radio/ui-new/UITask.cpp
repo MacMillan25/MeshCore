@@ -742,7 +742,7 @@ public:
     switch (page) {
 #ifdef UI_DARKTEC_SETTINGS
       case SettingsPage::ROOT:    return 6;   // + [ Darktec ]
-      case SettingsPage::DARKTEC_PAGE: return 6;   // 5 параметров + "Back" внизу
+      case SettingsPage::DARKTEC_PAGE: return 7;   // 6 параметров + "Back" внизу
 #else
       case SettingsPage::ROOT:    return 5;
 #endif
@@ -814,9 +814,9 @@ public:
     }
 #ifdef UI_DARKTEC_SETTINGS
     else if (page == SettingsPage::DARKTEC_PAGE) {
-      // Своя строка выхода внизу списка (как в официалке): i==5 — "Back",
-      // пункты — i==0..4. Без стрелки: курсор ">" рядом с "<" сливается.
-      if (i == 5) return "Back";
+      // Своя строка выхода внизу списка (как в официалке): i==6 — "Back",
+      // пункты — i==0..5. Без стрелки: курсор ">" рядом с "<" сливается.
+      if (i == 6) return "Back";
       if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
         return _darktec_note;
       }
@@ -825,6 +825,7 @@ public:
       if (i == 2) return "Brightness";
       if (i == 3) return "Bar";
       if (i == 4) return "V-Cut";
+      if (i == 5) return "Radio mod";
     }
 #endif
     else if (i == 0) {
@@ -1020,6 +1021,10 @@ public:
         // Порог отключения по низкому напряжению. 0 в prefs = штатные 3.40 В.
         const uint8_t v = s.low_batt_mv100 ? s.low_batt_mv100 : 34;
         snprintf(raw, sizeof(raw), "%u.%uV", (unsigned)(v / 10), (unsigned)(v % 10));
+      } else if (i == 5) {
+        // Модуль в этой сборке не выбирается: узел всегда на LR2021. Строка
+        // оставлена, чтобы меню было тем же, что и на E22-сборке.
+        snprintf(raw, sizeof(raw), "LR2021");
       }
       if (raw[0]) {
         snprintf(val, val_len, "%s", raw);
@@ -1236,6 +1241,11 @@ public:
                  (unsigned)(s.low_batt_mv100 / 10), (unsigned)(s.low_batt_mv100 % 10));
         darktecNote(i, note);
       } else if (i == 5) {
+        // Radio mod — не выбор, а надпись: модуль впаян и смене не подлежит.
+        // Нажатие только подтверждает это подсказкой на строке.
+        darktecNote(i, "Fixed");
+        return;
+      } else if (i == 6) {
         // Back — возврат в корень настроек (тот же переход, что у общей
         // строки i==0 на других подстраницах).
         _settings_page = SettingsPage::ROOT;
@@ -1876,10 +1886,10 @@ public:
                capacity ? (unsigned)(remain * 100u / capacity) : 0u);
       display.setCursor(0, by); display.print(bbuf); by += line_h;
 
-      uint32_t eta_min = board.isPowerModelCharging()
-                             ? board.getChargeEtaMinutes()
+      const bool chg = board.isPowerModelCharging();
+      uint32_t eta_min = chg ? board.getChargeEtaMinutes()
                              : board.getEtaMinutes();
-      if (board.isPowerModelCharging()) {
+      if (chg) {
         // Под зарядом ETA считается до полного, а не до пустого.
         if (eta_min > 0) {
           snprintf(bbuf, sizeof(bbuf), "ETA    CHG %luh %lum",
@@ -1896,15 +1906,15 @@ public:
       display.setCursor(0, by); display.print(bbuf); by += line_h;
 
       // Iavg намеренно не выводим: на полной банке он почти не меняется и
-      // выглядит застывшим. Показываем ток текущего состояния, а под зарядом —
-      // сколько реально льётся в банку.
-      if (board.isPowerModelCharging()) {
-        float i_ma = board.getBattCurrentMa();
-        if (i_ma < 0.0f) i_ma = -i_ma;
+      // выглядит застывшим. Показываем ИЗМЕРЕННЫЙ ток пакета — тот же, что на
+      // странице INA, с плюсом под зарядом. Модельная оценка тут врала: она
+      // берётся из таблиц по напряжению и подолгу стоит одним числом.
+      float i_ma = board.getInowMa();
+      if (i_ma < 0.0f) i_ma = -i_ma;   // знак шунта на разных платах разный
+      if (chg) {
         snprintf(bbuf, sizeof(bbuf), "Inow   +%umA", (unsigned)(i_ma + 0.5f));
       } else {
-        snprintf(bbuf, sizeof(bbuf), "Inow   %umA",
-                 (unsigned)(board.getStateLoadMa() + 0.5f));
+        snprintf(bbuf, sizeof(bbuf), "Inow   %umA", (unsigned)(i_ma + 0.5f));
       }
       display.setCursor(0, by); display.print(bbuf);
 
