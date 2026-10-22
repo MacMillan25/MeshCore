@@ -376,6 +376,38 @@ class HomeScreen : public UIScreen {
   uint32_t      day_win_start = 0;        // начало окна усреднения
   int16_t       day_last_min = -1;        // минута суток прошлой выборки
 
+  // --- вторая страница экрана «радио»: счётчики и занятость канала ----------
+  bool          radio_show_stats = false;
+  uint16_t      ch_busy = 0;      // выборок «канал занят»
+  uint16_t      ch_total = 0;     // всего выборок (окно ~1 мин, потом половим)
+
+  // Раз в 500 мс: канал занят, если мгновенный RSSI выше шумового пола на 6 дБ.
+  // CAD не трогаем — он прерывает приём, а RSSI ядро и так меряет для шума.
+  void noteChannelSample() {
+    const int16_t nf = (int16_t)radio_driver.getNoiseFloor();
+    const int16_t r = (int16_t)radio_driver.getLastRawRssi();
+    if (nf >= 0 || r == 0) return;
+    ch_total++;
+    if (r > nf + 6) ch_busy++;
+    if (ch_total >= 120) { ch_busy /= 2; ch_total /= 2; }
+  }
+
+  int channelBusyPercent() const {
+    return ch_total ? (int)((uint32_t)ch_busy * 100u / ch_total) : 0;
+  }
+
+  // Средний шум за сутки по накопленному суточному графику.
+  int dayAverageNoise() const {
+    int32_t sum = 0;
+    int n = 0;
+    for (int i = 0; i < DAY_COLS; i++) {
+      if (!day_cnt[i]) continue;
+      sum += day_val[i];
+      n++;
+    }
+    return n ? (int)(sum / n) : 0;
+  }
+
   // Текущая минута суток по часам ноды; -1, если часы недоступны.
   int dayMinuteOfDay() const {
     if (_rtc == nullptr) return -1;
@@ -545,6 +577,7 @@ class HomeScreen : public UIScreen {
     if ((int32_t)(now_ms - day_acc_next) >= 0) {
       day_acc_next = now_ms + DAY_ACC_MILLIS;
       const int16_t nf = (int16_t)radio_driver.getNoiseFloor();
+      noteChannelSample();   // занятость канала для второй страницы «радио»
       // Пока ядро не измерило пол, там ноль: такие отсчёты не копим, иначе
       // первые секунды после старта рисуются нулём и шкала уезжает.
       if (nf >= 0) {
@@ -1725,6 +1758,28 @@ public:
         y += line_h;
       }
     } else if (_page == HomePage::RADIO) {
+      // Вторая страница (долгое нажатие): счётчики пакетов, занятость канала
+      // и средний шум за сутки. Одна метрика на строку — читается с руки.
+      if (radio_show_stats) {
+        display.setColor(UIColor::primary_txt);
+        display.setTextSize(1);
+        int sy = content_y;
+        const uint32_t rx = radio_driver.getPacketsRecv();
+        const uint32_t tx = radio_driver.getPacketsSent();
+        const uint32_t er = radio_driver.getPacketsRecvErrors();
+        snprintf(tmp, sizeof(tmp), "RX   %lu", (unsigned long)rx);
+        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+        snprintf(tmp, sizeof(tmp), "TX   %lu", (unsigned long)tx);
+        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+        snprintf(tmp, sizeof(tmp), "ERR  %lu", (unsigned long)er);
+        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+        snprintf(tmp, sizeof(tmp), "BUSY %d%%", channelBusyPercent());
+        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+        snprintf(tmp, sizeof(tmp), "NFd  %d", dayAverageNoise());
+        display.setCursor(0, sy); display.print(tmp);
+        return 1000;
+      }
+
       display.setColor(UIColor::secondary_txt);
       display.setTextSize(hdr_size);
       int y = content_y;
@@ -2662,6 +2717,13 @@ public:
       return true;
     }
 #endif
+
+    // Долгое нажатие на экране радио — вторая страница: счётчики пакетов,
+    // занятость канала и средний шум за сутки.
+    if (c == KEY_ENTER && _page == HomePage::RADIO) {
+      radio_show_stats = !radio_show_stats;
+      return true;
+    }
 #ifdef UI_DARKTEC_SETTINGS
     // Долгое нажатие на экране часов включает/выключает заставку — та же
     // настройка, что «Экран → Часы всегда» (ui_clock_dim_mode).
