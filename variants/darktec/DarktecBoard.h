@@ -229,6 +229,11 @@ public:
 
   // Сколько процентов показывает модель (по кривой разряда, не линейно).
   uint8_t getSocPercent() const { return (uint8_t)(_pm.getSocPercent() + 0.5f); }
+
+  // Измеренная ёмкость пакета (цикл 3.0 В -> 4.15 В при хвосте <150 мА)
+  uint16_t getRealCapacityMah() const { return _pm.getRealCapMah(); }
+  void     setRealCapacityMah(uint16_t v) { _pm.setRealCapMah(v); }
+  bool     takeRealCapacityDirty() { return _pm.takeRealCapDirty(); }
   // false, пока модель не получила ни одного пригодного замера напряжения:
   // UI в этом случае показывает грубую линейную оценку, а не пустой значок.
   bool powerModelReady() const { return _pm.hasSoc(); }
