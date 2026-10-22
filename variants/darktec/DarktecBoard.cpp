@@ -360,8 +360,10 @@ void DarktecBoard::loop() {
     if (dt > 0) {
       const float batt_abs = fabsf(batt_ma);
       if (batt_abs > 0.0f) {
-        // A * s / 3600 == mAh. Только счётчик сессии для страницы INA.
-        _charge_mah += batt_abs * (float)dt / 3600.0f;
+        // mA * мс / 3 600 000 == mAh. Только счётчик сессии для страницы INA.
+        // Делитель считаем от миллиампер: пока ток был в амперах, хватало
+        // 3600, а с мА это давало ровно в тысячу раз больше.
+        _charge_mah += batt_abs * (float)dt / 3600000.0f;
         _charge_session_ms += dt;
       }
       // Долгий низкий ток при подключённом заряднике — банка взяла всё.
