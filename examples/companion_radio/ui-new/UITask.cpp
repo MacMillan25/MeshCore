@@ -1,4 +1,5 @@
 #include "UITask.h"
+#include <malloc.h>
 #include "UIExtensions.h"
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/BatteryPack.h>
@@ -376,6 +377,46 @@ class HomeScreen : public UIScreen {
   uint32_t      day_win_start = 0;        // начало окна усреднения
   int16_t       day_last_min = -1;        // минута суток прошлой выборки
 
+
+  // --- третья страница экрана батареи: uptime, время с зарядки, RealCap -----
+  bool     batt_show_stats = false;
+  uint64_t up_ms = 0;
+  uint32_t up_last_ms = 0;
+  uint32_t last_chrg_s = 0;   // секунды uptime на момент конца зарядки
+  bool     was_charging = false;
+
+  static float freeRamKb() {
+    struct mallinfo mi = mallinfo();
+    return (float)mi.fordblks / 1024.0f;
+  }
+
+  void noteUptime() {
+    const uint32_t now = millis();
+    if (now != up_last_ms) { up_ms += (uint32_t)(now - up_last_ms); up_last_ms = now; }
+    const bool ch = board.isCharging();
+    if (was_charging && !ch) {
+      last_chrg_s = (uint32_t)(up_ms / 1000ULL);
+      const uint32_t epoch = _rtc->getCurrentTime();
+      if (epoch > 1700000000UL) {
+        DarktecPrefs::Settings s = DarktecPrefs::get();
+        s.chrg_end_epoch = epoch;
+        DarktecPrefs::save(s);
+      }
+    }
+    was_charging = ch;
+    if (board.takeRealCapacityDirty()) {
+      DarktecPrefs::Settings s = DarktecPrefs::get();
+      s.real_cap_mah = board.getRealCapacityMah();
+      DarktecPrefs::save(s);
+    }
+  }
+
+  // dd:hh:mm из секунд
+  static void fmtUp(char* out, size_t n, uint32_t secs) {
+    snprintf(out, n, "%lud:%02lu:%02lu", (unsigned long)(secs / 86400UL),
+             (unsigned long)((secs / 3600UL) % 24UL), (unsigned long)((secs / 60UL) % 60UL));
+  }
+
   // --- вторая страница экрана «радио»: счётчики и занятость канала ----------
   bool          radio_show_stats = false;
   uint16_t      ch_busy = 0;      // выборок «канал занят»
@@ -556,6 +597,7 @@ class HomeScreen : public UIScreen {
   // Копит шумовой пол и SNR. Вызывается из UITask::loop() каждый цикл,
   // независимо от того, что на экране.
   void serviceNoise() override {
+    noteUptime();
     const int sample_ms = NOISE_SPEED_MS[constrain((int)DarktecPrefs::get().noise_idx, 0, 3)];
     if ((long)(millis() - next_noise_sample) >= 0) {
       const int16_t v = (int16_t)radio_driver.getNoiseFloor();
@@ -963,7 +1005,7 @@ public:
     switch (page) {
 #ifdef UI_DARKTEC_SETTINGS
       case SettingsPage::ROOT:    return 6;   // + [ Darktec ]
-      case SettingsPage::DARKTEC_PAGE: return 7;   // 6 параметров + "Back" внизу
+      case SettingsPage::DARKTEC_PAGE: return 8;   // 6 параметров + RAM + "Back"
 #else
       case SettingsPage::ROOT:    return 5;
 #endif
@@ -1037,7 +1079,13 @@ public:
     else if (page == SettingsPage::DARKTEC_PAGE) {
       // Своя строка выхода внизу списка (как в официалке): i==6 — "Back",
       // пункты — i==0..5. Без стрелки: курсор ">" рядом с "<" сливается.
-      if (i == 6) return "Back";
+      if (i == 7) return "Back";
+      if (i == 6) {
+        // Свободная память: значение только смотрится, по нажатию ничего нет.
+        static char ram[20];
+        snprintf(ram, sizeof(ram), "RAM %.1fK", (double)freeRamKb());
+        return ram;
+      }
       if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
         return _darktec_note;
       }
@@ -1461,12 +1509,14 @@ public:
         snprintf(note, sizeof(note), "OFF at %u.%uV",
                  (unsigned)(s.low_batt_mv100 / 10), (unsigned)(s.low_batt_mv100 % 10));
         darktecNote(i, note);
+      } else if (i == 6) {
+        return;   // RAM: только показать, менять нечем
       } else if (i == 5) {
         // Radio mod — не выбор, а надпись: модуль впаян и смене не подлежит.
         // Нажатие только подтверждает это подсказкой на строке.
         darktecNote(i, "Fixed");
         return;
-      } else if (i == 6) {
+      } else if (i == 7) {
         // Back — возврат в корень настроек (тот же переход, что у общей
         // строки i==0 на других подстраницах).
         _settings_page = SettingsPage::ROOT;
@@ -2126,6 +2176,33 @@ public:
 #endif
 #if UI_PAGE_BATT
     } else if (_page == HomePage::BATT) {
+      // Третья страница (долгое нажатие): uptime, время с последней зарядки,
+      // измеренная ёмкость. Данные — из prefs и счётчика uptime.
+      if (batt_show_stats) {
+        display.setColor(UIColor::primary_txt);
+        display.setTextSize(1);
+        char b1[20], b2[20];
+        int sy = content_y;
+        fmtUp(b1, sizeof(b1), (uint32_t)(up_ms / 1000ULL));
+        snprintf(tmp, sizeof(tmp), "up  %s", b1);
+        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+        const uint32_t epoch = _rtc->getCurrentTime();
+        const uint32_t saved = DarktecPrefs::get().chrg_end_epoch;
+        if (epoch > 1700000000UL && saved > 1700000000UL && epoch > saved) {
+          fmtUp(b2, sizeof(b2), epoch - saved);
+        } else if (last_chrg_s) {
+          fmtUp(b2, sizeof(b2), (uint32_t)(up_ms / 1000ULL) - last_chrg_s);
+        } else {
+          snprintf(b2, sizeof(b2), "--:--:--");
+        }
+        snprintf(tmp, sizeof(tmp), "chg %s", b2);
+        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+        const uint16_t rc = DarktecPrefs::get().real_cap_mah;
+        if (rc) snprintf(tmp, sizeof(tmp), "cap %u mAh", (unsigned)rc);
+        else    snprintf(tmp, sizeof(tmp), "cap  no data");
+        display.setCursor(0, sy); display.print(tmp);
+        return 1000;
+      }
       display.setTextSize(1);
       refresh_sensors(UI_INA_REFRESH_MS);
 
@@ -2769,6 +2846,13 @@ public:
     // занятость канала и средний шум за сутки.
     if (c == KEY_ENTER && _page == HomePage::RADIO) {
       radio_show_stats = !radio_show_stats;
+      return true;
+    }
+
+    // Долгое нажатие на экране батареи — третья страница: uptime, время с
+    // последней зарядки и измеренная ёмкость пакета.
+    if (c == KEY_ENTER && _page == HomePage::BATT) {
+      batt_show_stats = !batt_show_stats;
       return true;
     }
 #ifdef UI_DARKTEC_SETTINGS
