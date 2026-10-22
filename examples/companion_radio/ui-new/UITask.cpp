@@ -408,6 +408,30 @@ class HomeScreen : public UIScreen {
     return n ? (int)(sum / n) : 0;
   }
 
+  // Счётчик в строку: до 99999 как есть, дальше 124.3k, от миллиона 1.2M.
+  static void fmtCount(char* out, size_t n, uint32_t v) {
+    if (v < 100000UL) {
+      snprintf(out, n, "%lu", (unsigned long)v);
+    } else if (v < 1000000UL) {
+      snprintf(out, n, "%lu.%luk", (unsigned long)(v / 1000UL),
+               (unsigned long)((v % 1000UL) / 100UL));
+    } else {
+      snprintf(out, n, "%lu.%luM", (unsigned long)(v / 1000000UL),
+               (unsigned long)((v % 1000000UL) / 100000UL));
+    }
+  }
+
+  // Среднее SNR по всему окну графика: 64 точки, по одной на пакетное окно.
+  // График живёт по пакетам, поэтому «окно» — это последние 64 пачки приёма.
+  float snrAverage() const {
+    if (!snr_count) return 0.0f;
+    int32_t sum = 0;
+    for (uint8_t i = 0; i < snr_count; i++) {
+      sum += noiseSampleAt(snr_hist, snr_head, snr_count, i);
+    }
+    return (float)sum / (10.0f * (float)snr_count);
+  }
+
   // Текущая минута суток по часам ноды; -1, если часы недоступны.
   int dayMinuteOfDay() const {
     if (_rtc == nullptr) return -1;
@@ -1758,29 +1782,46 @@ public:
         y += line_h;
       }
     } else if (_page == HomePage::RADIO) {
-      // Вторая страница (долгое нажатие): счётчики пакетов, занятость канала
-      // и средний шум за сутки. Одна метрика на строку — читается с руки.
+      // Вторая страница (долгое нажатие): счётчики пакетов, занятость канала,
+      // скважность своей передачи, средний шум за сутки и средний SNR по окну
+      // графика. Две колонки по 11 знаков: левая с x=0, правая ровно с x=66.
       if (radio_show_stats) {
         display.setColor(UIColor::primary_txt);
         display.setTextSize(1);
-        // getLineH(1) = 11 — с таким шагом пятая строка уезжает за экран.
-        // Глиф занимает 7 px, поэтому шаг 9 px, а начинаем на 2 px выше
-        // content_y: пять строк укладываются в 20..62.
-        const int step = 9;
-        int sy = content_y - 2;
-        const uint32_t rx = radio_driver.getPacketsRecv();
-        const uint32_t tx = radio_driver.getPacketsSent();
-        const uint32_t er = radio_driver.getPacketsRecvErrors();
-        snprintf(tmp, sizeof(tmp), "RX   %lu", (unsigned long)rx);
-        display.setCursor(0, sy); display.print(tmp); sy += step;
-        snprintf(tmp, sizeof(tmp), "TX   %lu", (unsigned long)tx);
-        display.setCursor(0, sy); display.print(tmp); sy += step;
-        snprintf(tmp, sizeof(tmp), "ERR  %lu", (unsigned long)er);
-        display.setCursor(0, sy); display.print(tmp); sy += step;
-        snprintf(tmp, sizeof(tmp), "BUSY %d%%", channelBusyPercent());
-        display.setCursor(0, sy); display.print(tmp); sy += step;
-        snprintf(tmp, sizeof(tmp), "NFd  %d", dayAverageNoise());
+
+        char a[16], b[16];
+        const int col2 = 66;
+        int sy = content_y;
+
+        // RXp / TXp — счётчики, с сокращением от 100 000 (124.3k).
+        fmtCount(a, sizeof(a), radio_driver.getPacketsRecv());
+        fmtCount(b, sizeof(b), radio_driver.getPacketsSent());
+        snprintf(tmp, sizeof(tmp), "RXp %s", a);
         display.setCursor(0, sy); display.print(tmp);
+        snprintf(tmp, sizeof(tmp), "TXp %s", b);
+        display.setCursor(col2, sy); display.print(tmp);
+        sy += line_h;
+
+        // ERR-RX — ошибки приёма (CRC).
+        fmtCount(a, sizeof(a), radio_driver.getPacketsRecvErrors());
+        snprintf(tmp, sizeof(tmp), "ERR-RX %s", a);
+        display.setCursor(0, sy); display.print(tmp);
+        sy += line_h;
+
+        // BUSY — занятость канала; TX% — своя скважность за 10 минут.
+        const float duty = board.getTxDutyFraction() * 100.0f;
+        snprintf(tmp, sizeof(tmp), "BUSY %d%%", channelBusyPercent());
+        display.setCursor(0, sy); display.print(tmp);
+        snprintf(tmp, sizeof(tmp), "TX%% %.1f", (double)duty);
+        display.setCursor(col2, sy); display.print(tmp);
+        sy += line_h;
+
+        // NFd — средний шум за сутки; SNR — среднее по всему окну графика SNR.
+        const float snr = snrAverage();
+        snprintf(tmp, sizeof(tmp), "NFd %d", dayAverageNoise());
+        display.setCursor(0, sy); display.print(tmp);
+        snprintf(tmp, sizeof(tmp), "SNR %s%.1f", snr < 0 ? "" : " ", (double)snr);
+        display.setCursor(col2, sy); display.print(tmp);
         return 1000;
       }
 
