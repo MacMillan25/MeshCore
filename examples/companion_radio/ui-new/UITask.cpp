@@ -1884,10 +1884,10 @@ public:
                capacity ? (unsigned)(remain * 100u / capacity) : 0u);
       display.setCursor(0, by); display.print(bbuf); by += line_h;
 
-      uint32_t eta_min = board.isPowerModelCharging()
-                             ? board.getChargeEtaMinutes()
+      const bool chg = board.isPowerModelCharging();
+      uint32_t eta_min = chg ? board.getChargeEtaMinutes()
                              : board.getEtaMinutes();
-      if (board.isPowerModelCharging()) {
+      if (chg) {
         // Под зарядом ETA считается до полного, а не до пустого.
         if (eta_min > 0) {
           snprintf(bbuf, sizeof(bbuf), "ETA    CHG %luh %lum",
@@ -1904,15 +1904,15 @@ public:
       display.setCursor(0, by); display.print(bbuf); by += line_h;
 
       // Iavg намеренно не выводим: на полной банке он почти не меняется и
-      // выглядит застывшим. Показываем ток текущего состояния, а под зарядом —
-      // сколько реально льётся в банку.
-      if (board.isPowerModelCharging()) {
-        float i_ma = board.getBattCurrentMa();
-        if (i_ma < 0.0f) i_ma = -i_ma;
+      // выглядит застывшим. Показываем ИЗМЕРЕННЫЙ ток пакета — тот же, что на
+      // странице INA, с плюсом под зарядом. Модельная оценка тут врала: она
+      // берётся из таблиц по напряжению и подолгу стоит одним числом.
+      float i_ma = board.getInowMa();
+      if (i_ma < 0.0f) i_ma = -i_ma;   // знак шунта на разных платах разный
+      if (chg) {
         snprintf(bbuf, sizeof(bbuf), "Inow   +%umA", (unsigned)(i_ma + 0.5f));
       } else {
-        snprintf(bbuf, sizeof(bbuf), "Inow   %umA",
-                 (unsigned)(board.getStateLoadMa() + 0.5f));
+        snprintf(bbuf, sizeof(bbuf), "Inow   %umA", (unsigned)(i_ma + 0.5f));
       }
       display.setCursor(0, by); display.print(bbuf);
 

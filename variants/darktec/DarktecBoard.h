@@ -88,12 +88,6 @@ void darktec_radio_set_rf(uint8_t module_idx);
 #ifndef DARKTEC_INA_CHARGE_CH
 #define DARKTEC_INA_CHARGE_CH 1
 #endif
-#ifndef DARKTEC_CHARGE_ON_MA
-#define DARKTEC_CHARGE_ON_MA  120.0f
-#endif
-#ifndef DARKTEC_CHARGE_OFF_MA
-#define DARKTEC_CHARGE_OFF_MA 100.0f
-#endif
 // 3-й канал INA — ток самого пакета. Именно его интегрирует счётчик мАч:
 // зарядник отдаёт больше, чем доходит до банки (часть уходит на питание ноды).
 #ifndef DARKTEC_INA_BATT_CH
@@ -171,10 +165,8 @@ protected:
   float adc_mult = ADC_MULTIPLIER;
   Adafruit_INA3221 _ina;
   bool _ina_ok = false;
-  bool _charging = false;
   bool _txing = false;
   bool _rxing = false;
-  uint32_t _ina_last_ms = 0;
   uint32_t _tx_hold_until = 0;
   uint32_t _rx_hold_until = 0;
 
@@ -197,7 +189,6 @@ protected:
   uint8_t  _radio_module = DARKTEC_RADIO_DEFAULT_MODULE;
   int8_t   _tx_dbm = 22;              // выставленная мощность: нужна CLI и модели
 
-  void pollChargeSense();
   bool readInaShuntReady();
 #ifdef NRF52_POWER_MANAGEMENT
   void initiateShutdown(uint8_t reason) override;
@@ -206,6 +197,8 @@ protected:
 public:
   DarktecBoard() : NRF52Board("Darktec_OTA") {}
   void begin();
+  // «Зарядник подключён» — по шине CHRG, не по току: ток заряда к концу
+  // заливки падает ниже порога, а знак шунта на платах разный.
   bool isCharging();
   bool isExternalPowered() override;
 
@@ -257,9 +250,15 @@ public:
   // Остаток до полного заряда (0, если заряда нет) — для страницы батареи.
   uint32_t getChargeEtaMinutes() const { return _pm.etaChargeMinutes(); }
 
-  // Ток пакета как есть: под зарядом он положительный и показывает, сколько
-  // реально льётся в банку (в отличие от модельного getStateLoadMa).
+  // Ток пакета как есть: под зарядом он показывает, сколько реально льётся
+  // в банку (в отличие от модельного getStateLoadMa).
   float getBattCurrentMa() const { return _pm.getBattCurrentMa(); }
+
+  // Ток для строки Inow: измеренный, а не модельный. Если INA ещё/уже не
+  // отвечает, падаем на модельную оценку — пустое место на экране хуже.
+  float getInowMa() const {
+    return _pm.isCurrentKnown() ? _pm.getBattCurrentMa() : _pm.currentNowMa(_txing);
+  }
 
   // Модуль и мощность передатчика: то, чем модель различает железо.
   // Вызывается и из UI компаньона, и из CLI — чтобы у всех ролей было одно.
