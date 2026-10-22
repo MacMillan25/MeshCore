@@ -421,7 +421,10 @@ class HomeScreen : public UIScreen {
     // getLineH(hdr_size) - 3, где hdr_size = 2 для широких экранов.
     const int hdr_size = (display.width() >= 200) ? 2 : 1;
     const int hdr_line_h = display.getLineH(hdr_size) - 3;
-    const int plot_y = hdr_line_h + 9;
+    // Сверху своя строка (текущий шум и диапазон шкалы), поэтому поле графика
+    // начинается ниже неё: у шапки ноды занято до hdr_line_h + 11 (точки
+    // страниц), текст ставим на hdr_line_h + 7, график — с hdr_line_h + 15.
+    const int plot_y = hdr_line_h + 15;
     const int foot_y = display.height() - 10;
     const int plot_h = foot_y - 2 - plot_y;
     const int plot_w = display.width();
@@ -446,10 +449,10 @@ class HomeScreen : public UIScreen {
     char buf[16];
     display.setColor(UIColor::primary_txt);
     snprintf(buf, sizeof(buf), "NF %d", (int)radio_driver.getNoiseFloor());
-    display.setCursor(0, plot_y - 9);
+    display.setCursor(0, plot_y - 8);
     display.print(buf);
     snprintf(buf, sizeof(buf), "%d..%d", hi, lo);
-    display.setCursor(display.width() - display.getTextWidth(buf), plot_y - 9);
+    display.setCursor(display.width() - display.getTextWidth(buf), plot_y - 8);
     display.print(buf);
 
     // Линия: по одному столбцу на пиксель, разрыв там, где данных нет.
@@ -487,7 +490,8 @@ class HomeScreen : public UIScreen {
     }
     static const char* kHourMarks[4] = { "00", "06", "12", "18" };
     for (int k = 0; k < 4; k++) {
-      display.setCursor(k * 32 + 1, foot_y + 1);
+      // От стенки отступаем двумя пикселями: вплотную «6» липла к линии.
+      display.setCursor(k == 0 ? 1 : k * 32 + 2, foot_y + 1);
       display.print(kHourMarks[k]);
     }
     display.setColor(UIColor::primary_txt);
