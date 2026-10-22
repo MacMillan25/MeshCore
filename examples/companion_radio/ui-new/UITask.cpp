@@ -1763,18 +1763,22 @@ public:
       if (radio_show_stats) {
         display.setColor(UIColor::primary_txt);
         display.setTextSize(1);
-        int sy = content_y;
+        // getLineH(1) = 11 — с таким шагом пятая строка уезжает за экран.
+        // Глиф занимает 7 px, поэтому шаг 9 px, а начинаем на 2 px выше
+        // content_y: пять строк укладываются в 20..62.
+        const int step = 9;
+        int sy = content_y - 2;
         const uint32_t rx = radio_driver.getPacketsRecv();
         const uint32_t tx = radio_driver.getPacketsSent();
         const uint32_t er = radio_driver.getPacketsRecvErrors();
         snprintf(tmp, sizeof(tmp), "RX   %lu", (unsigned long)rx);
-        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+        display.setCursor(0, sy); display.print(tmp); sy += step;
         snprintf(tmp, sizeof(tmp), "TX   %lu", (unsigned long)tx);
-        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+        display.setCursor(0, sy); display.print(tmp); sy += step;
         snprintf(tmp, sizeof(tmp), "ERR  %lu", (unsigned long)er);
-        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+        display.setCursor(0, sy); display.print(tmp); sy += step;
         snprintf(tmp, sizeof(tmp), "BUSY %d%%", channelBusyPercent());
-        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+        display.setCursor(0, sy); display.print(tmp); sy += step;
         snprintf(tmp, sizeof(tmp), "NFd  %d", dayAverageNoise());
         display.setCursor(0, sy); display.print(tmp);
         return 1000;
