@@ -38,6 +38,8 @@ struct Settings {
   uint8_t bar_value;      // BarValue: что показывать в мини-баре заставки
   uint8_t low_batt_mv100; // порог отключения по низкому напряжению, в 100 мВ; 0 = штатный 3.40 В
   uint32_t factory_crc;   // CRC32 применённого блока заводских настроек (0 = не применяли)
+  uint16_t real_cap_mah;  // измеренная ёмкость пакета, mAh (0 = ещё не измеряли)
+  uint32_t chrg_end_epoch; // Unix-время конца последней зарядки (0 = неизвестно)
 };
 
 // Что показывать в мини-баре заставки «Always On».
@@ -78,9 +80,9 @@ constexpr uint16_t kCapacityDefault = 3000;
 constexpr uint8_t kAutoOffCount = 5;
 constexpr uint8_t kNoiseCount = 4;
 
-constexpr uint8_t kWireVersion = 4;
-constexpr uint8_t kWireSize = 20;  // magic(4) + ver(1) + payload(13) + crc(2)
-constexpr uint8_t kPayloadSize = 13;
+constexpr uint8_t kWireVersion = 5;
+constexpr uint8_t kWireSize = 26;  // magic(4) + ver(1) + payload(19) + crc(2)
+constexpr uint8_t kPayloadSize = 19;
 
 inline void sanitize(Settings& s);
 
@@ -120,6 +122,7 @@ inline void sanitize(Settings& s) {
   if (s.brightness >= kBrightnessCount) s.brightness = BRI_HIGH;
   if (s.bar_value >= kBarValueCount) s.bar_value = BAR_NF;
   if (s.low_batt_mv100 > 40) s.low_batt_mv100 = 0;   // 0..4.0 В; больше — мусор
+  if (s.real_cap_mah > 20000) s.real_cap_mah = 0;      // мусор в файле — считаем «не измерено»
 }
 
 // CRC16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
@@ -159,15 +162,23 @@ inline size_t serialize(const Settings& s, uint8_t* buf, size_t len) {
   buf[16] = (uint8_t)((t.factory_crc >> 16) & 0xFF);
   buf[17] = (uint8_t)((t.factory_crc >> 24) & 0xFF);
   const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
-  buf[18] = (uint8_t)(crc & 0xFF);
-  buf[19] = (uint8_t)(crc >> 8);
+  // v5: измеренная ёмкость и время конца последней зарядки.
+  buf[18] = (uint8_t)(t.real_cap_mah & 0xFF);
+  buf[19] = (uint8_t)(t.real_cap_mah >> 8);
+  buf[20] = (uint8_t)(t.chrg_end_epoch & 0xFF);
+  buf[21] = (uint8_t)((t.chrg_end_epoch >> 8) & 0xFF);
+  buf[22] = (uint8_t)((t.chrg_end_epoch >> 16) & 0xFF);
+  buf[23] = (uint8_t)((t.chrg_end_epoch >> 24) & 0xFF);
+  const uint16_t crc2 = crc16(buf + 4, 1 + kPayloadSize);
+  buf[24] = (uint8_t)(crc2 & 0xFF);
+  buf[25] = (uint8_t)(crc2 >> 8);
   return kWireSize;
 }
 
 // v1 (прошивки beeline 1.18.0): capacity(2), chem, cells, module, charge(2).
 // Порядок модулей был другим (0 RA62, 1 30S, 2 E22P, 3 33S) — переводим.
 inline bool parseV1(const uint8_t* buf, size_t len, Settings& out) {
-  if (len < kWireSize) return false;
+  if (len < 20) return false;
   const uint16_t crc_stored = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
   if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
   Settings s{};
@@ -188,7 +199,7 @@ inline bool parseV1(const uint8_t* buf, size_t len, Settings& out) {
 // v2 (наш первый перенос): те же байты, но резерв вместо режима ёмкости.
 // Режим всегда UserPref — старая ёмкость 3000/4000 и была пользовательской.
 inline bool parseV2(const uint8_t* buf, size_t len, Settings& out) {
-  if (len < kWireSize) return false;
+  if (len < 20) return false;
   const uint16_t crc_stored = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
   if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
   Settings s{};
@@ -205,7 +216,7 @@ inline bool parseV2(const uint8_t* buf, size_t len, Settings& out) {
 
 // v3: появился режим ёмкости, яркости ещё не было — ставим максимальную.
 inline bool parseV3(const uint8_t* buf, size_t len, Settings& out) {
-  if (len < kWireSize) return false;
+  if (len < 20) return false;
   const uint16_t crc_stored = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
   if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
   Settings s{};
@@ -221,7 +232,7 @@ inline bool parseV3(const uint8_t* buf, size_t len, Settings& out) {
 }
 
 inline bool parseV4(const uint8_t* buf, size_t len, Settings& out) {
-  if (len < kWireSize) return false;
+  if (len < 20) return false;
   const uint16_t crc_stored = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
   if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
   Settings s{};
@@ -240,14 +251,38 @@ inline bool parseV4(const uint8_t* buf, size_t len, Settings& out) {
   return true;
 }
 
+inline bool parseV5(const uint8_t* buf, size_t len, Settings& out) {
+  if (len < 20) return false;
+  const uint16_t crc_stored = (uint16_t)(buf[24] | ((uint16_t)buf[25] << 8));
+  if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
+  Settings s{};
+  s.capacity_mah = (uint16_t)(buf[5] | ((uint16_t)buf[6] << 8));
+  s.module = buf[7];
+  s.auto_off_idx = buf[8];
+  s.noise_idx = buf[9];
+  s.capacity_mode = buf[10];
+  s.brightness = buf[11];
+  s.bar_value = buf[12];
+  s.low_batt_mv100 = buf[13];
+  s.factory_crc = (uint32_t)buf[14] | ((uint32_t)buf[15] << 8) |
+                  ((uint32_t)buf[16] << 16) | ((uint32_t)buf[17] << 24);
+  s.real_cap_mah = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
+  s.chrg_end_epoch = (uint32_t)buf[20] | ((uint32_t)buf[21] << 8) |
+                     ((uint32_t)buf[22] << 16) | ((uint32_t)buf[23] << 24);
+  sanitize(s);
+  out = s;
+  return true;
+}
+
 inline bool parse(const uint8_t* buf, size_t len, Settings& out) {
-  if (len < kWireSize) return false;
+  if (len < 20) return false;
   if (buf[0] != 'D' || buf[1] != 'R' || buf[2] != 'T' || buf[3] != 'C') return false;
   switch (buf[4]) {
     case 1: return parseV1(buf, len, out);
     case 2: return parseV2(buf, len, out);
     case 3: return parseV3(buf, len, out);
-    case kWireVersion: return parseV4(buf, len, out);
+    case 4: return parseV4(buf, len, out);
+    case kWireVersion: return parseV5(buf, len, out);
     default: return false;
   }
 }

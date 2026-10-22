@@ -34,7 +34,7 @@ void ensureLoaded() {
     const int n = f.read(buf, sizeof(buf));
     f.close();
     Settings parsed{};
-    if (n == (int)kWireSize && parse(buf, (size_t)n, parsed)) {
+    if (n >= 20 && parse(buf, (size_t)n, parsed)) {
       s = parsed;
     }
   }
