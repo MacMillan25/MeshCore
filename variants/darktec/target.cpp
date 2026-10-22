@@ -46,13 +46,6 @@ bool radio_init() {
 //                                  ногу в 0 и выключил усилитель.
 // Поэтому для E22P RF-ключ отключается совсем, а нога держится высоким.
 void darktec_radio_set_rf(uint8_t module_idx) {
-  // DIO2 чипа — это TXEN модуля (у HT-RA62 пины 5 и 7 спаяны дорожкой).
-  // В std_init() эта настройка включается по #ifdef SX126X_DIO2_AS_RF_SWITCH, а
-  // inline-функция собирается в каждой единице трансляции: если победит копия
-  // без макроса, DIO2 молчит, TXEN остаётся в нуле и передачи нет. Поэтому
-  // ставим режим явно, вызовом — так он гарантированно попадёт в чип.
-  radio.setDio2AsRfSwitch(true);
-
   if (module_idx == DARKTEC_MODULE_E22P) {
     radio.setRfSwitchPins(RADIOLIB_NC, RADIOLIB_NC);
   } else {
