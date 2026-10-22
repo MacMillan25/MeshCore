@@ -1104,12 +1104,7 @@ public:
       // Своя строка выхода внизу списка (как в официалке): i==7 — "Back",
       // пункты — i==0..6. Без стрелки: курсор ">" рядом с "<" сливается.
       if (i == 7) return "Back";
-      if (i == 6) {
-        // Свободная память: значение только смотрится, по нажатию ничего нет.
-        static char ram[20];
-        snprintf(ram, sizeof(ram), "RAM %.1fK", (double)freeRamBytes() / 1024.0);
-        return ram;
-      }
+      if (i == 6) return "RAM";   // число — значением, печатается по правому краю
       if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
         return _darktec_note;
       }
@@ -1318,6 +1313,10 @@ public:
         // Порядок обязан совпадать с DarktecPrefsFormat::ModuleCode.
         static const char* mod_names[4] = { "E22-33S", "E22-30S", "RA62", "E22P" };
         snprintf(raw, sizeof(raw), "%s", mod_names[s.module < 4 ? s.module : 0]);
+      } else if (i == 6) {
+        // Свободная память: только смотрится. Печатается значением, поэтому
+        // строка меню right-align'ит число у правого края экрана.
+        snprintf(raw, sizeof(raw), "%.1fK", (double)freeRamBytes() / 1024.0);
       }
       if (raw[0]) {
         snprintf(val, val_len, "%s", raw);
