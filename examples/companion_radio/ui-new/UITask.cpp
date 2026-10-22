@@ -10,6 +10,17 @@
 #include "../UILang.h"
 #include "target.h"
 #include <time.h>
+
+// Куча в этой сборке растёт до __HeapLimit — это низ двухкилобайтного стека
+// (nrf52_common.ld, __StackLimit). Верх кучи отдаёт своя реализация _sbrk()
+// из core (new.cpp): вызов с нулём ничего не выделяет, только возвращает
+// текущую границу. Без него видно только освобождённые блоки, а не всю
+// ещё не выданную память.
+extern "C" {
+  extern unsigned char __HeapLimit[];
+  char* _sbrk(int incr);
+}
+
 // Страница настроек Darktec (spec 0001, FR-8..13): значения живут в
 // /darktec.prefs (variants/darktec), поэтому правка доступна только сборкам
 // варианта Darktec — заголовок есть в include-пути лишь у него.
@@ -385,9 +396,14 @@ class HomeScreen : public UIScreen {
   uint32_t last_chrg_s = 0;   // секунды uptime на момент конца зарядки
   bool     was_charging = false;
 
-  static float freeRamKb() {
-    struct mallinfo mi = mallinfo();
-    return (float)mi.fordblks / 1024.0f;
+  // Свободная RAM = невыданный остаток кучи + освобождённые блоки.
+  // mallinfo().fordblks один врал: он видит только освобождённые куски,
+  // а не всю память, до которой куча ещё может вырасти.
+  static uint32_t freeRamBytes() {
+    const uint32_t top = (uint32_t)(uintptr_t)_sbrk(0);
+    const uint32_t limit = (uint32_t)(uintptr_t)__HeapLimit;
+    const uint32_t gap = (top < limit) ? (limit - top) : 0;
+    return gap + (uint32_t)mallinfo().fordblks;
   }
 
   void noteUptime() {
@@ -411,10 +427,18 @@ class HomeScreen : public UIScreen {
     }
   }
 
-  // dd:hh:mm из секунд
-  static void fmtUp(char* out, size_t n, uint32_t secs) {
-    snprintf(out, n, "%lud:%02lu:%02lu", (unsigned long)(secs / 86400UL),
+  // 00d:00h:00m из секунд
+  static void fmtUptime(char* out, size_t n, uint32_t secs) {
+    snprintf(out, n, "%02lud:%02luh:%02lum", (unsigned long)(secs / 86400UL),
              (unsigned long)((secs / 3600UL) % 24UL), (unsigned long)((secs / 60UL) % 60UL));
+  }
+
+  // Строка страницы ETA: подпись слева, значение прижато к правому краю.
+  // В общий столбец 00d:00h:00m (11 знаков) с подписью не влезает.
+  void printStatLine(DisplayDriver& d, int& y, int step, const char* label, const char* value) {
+    d.setCursor(0, y); d.print(label);
+    d.setCursor(d.width() - d.getTextWidth(value), y); d.print(value);
+    y += step;
   }
 
   // --- вторая страница экрана «радио»: счётчики и занятость канала ----------
@@ -1077,13 +1101,13 @@ public:
     }
 #ifdef UI_DARKTEC_SETTINGS
     else if (page == SettingsPage::DARKTEC_PAGE) {
-      // Своя строка выхода внизу списка (как в официалке): i==6 — "Back",
-      // пункты — i==0..5. Без стрелки: курсор ">" рядом с "<" сливается.
+      // Своя строка выхода внизу списка (как в официалке): i==7 — "Back",
+      // пункты — i==0..6. Без стрелки: курсор ">" рядом с "<" сливается.
       if (i == 7) return "Back";
       if (i == 6) {
         // Свободная память: значение только смотрится, по нажатию ничего нет.
         static char ram[20];
-        snprintf(ram, sizeof(ram), "RAM %.1fK", (double)freeRamKb());
+        snprintf(ram, sizeof(ram), "RAM %.1fK", (double)freeRamBytes() / 1024.0);
         return ram;
       }
       if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
@@ -2183,24 +2207,25 @@ public:
         display.setTextSize(1);
         char b1[20], b2[20];
         int sy = content_y;
-        fmtUp(b1, sizeof(b1), (uint32_t)(up_ms / 1000ULL));
-        snprintf(tmp, sizeof(tmp), "up  %s", b1);
-        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+
+        fmtUptime(b1, sizeof(b1), (uint32_t)(up_ms / 1000ULL));
+        printStatLine(display, sy, line_h, "UpTime", b1);
+
         const uint32_t epoch = _rtc->getCurrentTime();
         const uint32_t saved = DarktecPrefs::get().chrg_end_epoch;
         if (epoch > 1700000000UL && saved > 1700000000UL && epoch > saved) {
-          fmtUp(b2, sizeof(b2), epoch - saved);
+          fmtUptime(b2, sizeof(b2), epoch - saved);
         } else if (last_chrg_s) {
-          fmtUp(b2, sizeof(b2), (uint32_t)(up_ms / 1000ULL) - last_chrg_s);
+          fmtUptime(b2, sizeof(b2), (uint32_t)(up_ms / 1000ULL) - last_chrg_s);
         } else {
-          snprintf(b2, sizeof(b2), "--:--:--");
+          snprintf(b2, sizeof(b2), "--d:--h:--m");
         }
-        snprintf(tmp, sizeof(tmp), "chg %s", b2);
-        display.setCursor(0, sy); display.print(tmp); sy += line_h;
+        printStatLine(display, sy, line_h, "LastCHRG", b2);
+
         const uint16_t rc = DarktecPrefs::get().real_cap_mah;
-        if (rc) snprintf(tmp, sizeof(tmp), "cap %u mAh", (unsigned)rc);
-        else    snprintf(tmp, sizeof(tmp), "cap  no data");
-        display.setCursor(0, sy); display.print(tmp);
+        if (rc) snprintf(b1, sizeof(b1), "%u mAh", (unsigned)rc);
+        else    snprintf(b1, sizeof(b1), "no data");
+        printStatLine(display, sy, line_h, "RealCap", b1);
         return 1000;
       }
       display.setTextSize(1);
