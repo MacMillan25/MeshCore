@@ -105,6 +105,11 @@ static void utf8_truncate(char* s, int max_bytes) {
   #define NOISE_SAMPLE_MILLIS  500
   // Шаги скорости из подменю DarkTec (NF Speed), мс.
   static const int NOISE_SPEED_MS[4] = { 100, 250, 500, 1000 };
+
+  // Суточный график: 128 столбцов = 24 часа, столбец ≈ 11 мин 15 с.
+  #define DAY_COLS         128
+  #define DAY_AVG_MILLIS   10000   // одна выборка — среднее за 10 секунд
+  #define DAY_ACC_MILLIS   500     // как часто берём шумовой пол в усреднение
 #endif
 
 // Входящее сообщение висит ровно столько и не больше.
@@ -357,7 +362,136 @@ class HomeScreen : public UIScreen {
   uint16_t      snr_acc_n = 0;
   uint32_t      snr_window_start = 0;
 
-  bool          noise_show_snr = false;           // false = шум, true = SNR
+  // Что рисуем на странице шума: 0 — живой шум, 1 — SNR, 2 — суточный шум.
+  // Листается долгим нажатием по кругу.
+  uint8_t       noise_mode = 0;
+
+  // --- суточный график шумового пола -----------------------------------------
+  // Только в RAM: после перезагрузки график начинается с текущего часа.
+  int16_t       day_val[DAY_COLS] = {};   // средний шум столбца, dBm
+  uint8_t       day_cnt[DAY_COLS] = {};   // сколько выборок, 0 — данных нет
+  float         day_acc = 0.0f;           // накопитель текущего 10-секундного окна
+  uint16_t      day_acc_n = 0;
+  uint32_t      day_acc_next = 0;         // когда взять следующий отсчёт
+  uint32_t      day_win_start = 0;        // начало окна усреднения
+  int16_t       day_last_min = -1;        // минута суток прошлой выборки
+
+  // Текущая минута суток по часам ноды; -1, если часы недоступны.
+  int dayMinuteOfDay() const {
+    if (_rtc == nullptr) return -1;
+    time_t now = (time_t)_rtc->getCurrentTime();
+    if (_node_prefs && _node_prefs->tz_offset != 0) {
+      now += (time_t)_node_prefs->tz_offset * 3600;
+    }
+    struct tm t;
+    localtime_r(&now, &t);
+    return t.tm_hour * 60 + t.tm_min;
+  }
+
+  // Кладём одну 10-секундную выборку в столбец текущего часа.
+  void foldDaySample(float avg) {
+    const int minute = dayMinuteOfDay();
+    if (minute < 0 || minute > 1439) return;
+
+    // Смена суток — начинаем график заново.
+    if (day_last_min >= 0 && minute < day_last_min - 1) {
+      memset(day_val, 0, sizeof(day_val));
+      memset(day_cnt, 0, sizeof(day_cnt));
+    }
+    day_last_min = minute;
+
+    const uint16_t px = (uint16_t)((uint32_t)minute * DAY_COLS / 1440u);
+    if (px >= DAY_COLS) return;
+
+    const int16_t v = (int16_t)(avg < 0.0f ? avg - 0.5f : avg + 0.5f);
+    if (day_cnt[px] == 0) {
+      day_val[px] = v;
+    } else {
+      // Целое среднее без накопления суммы: столбец живёт 11 минут.
+      day_val[px] = (int16_t)(((int32_t)day_val[px] * day_cnt[px] + v) /
+                              (int32_t)(day_cnt[px] + 1));
+    }
+    if (day_cnt[px] < 255) day_cnt[px]++;
+  }
+
+  // Экран «шум за сутки»: 128 столбцов = 24 часа, 1 px линия, разрывы на
+  // пропусках, автошкала по накопленному, снизу часы интервалами.
+  void renderNoiseDay(DisplayDriver& display) {
+    // Геометрия та же, что у живого графика: в render() это hdr_line_h =
+    // getLineH(hdr_size) - 3, где hdr_size = 2 для широких экранов.
+    const int hdr_size = (display.width() >= 200) ? 2 : 1;
+    const int hdr_line_h = display.getLineH(hdr_size) - 3;
+    const int plot_y = hdr_line_h + 9;
+    const int foot_y = display.height() - 10;
+    const int plot_h = foot_y - 2 - plot_y;
+    const int plot_w = display.width();
+    const int y_top = plot_y;
+    const int y_bot = plot_y + plot_h - 2;
+
+    // Автошкала по суткам: мин…макс с запасом 2 dB, но не уже 10 dB — иначе
+    // почти ровная линия растягивается в ложные подробности.
+    int lo = 0, hi = 0;
+    bool have = false;
+    for (int i = 0; i < plot_w && i < DAY_COLS; i++) {
+      if (!day_cnt[i]) continue;
+      const int v = day_val[i];
+      if (!have) { lo = hi = v; have = true; }
+      else { if (v < lo) lo = v; if (v > hi) hi = v; }
+    }
+    if (!have) { lo = -110; hi = -90; }
+    lo -= 2; hi += 2;
+    if (hi - lo < 10) { const int mid = (lo + hi) / 2; lo = mid - 5; hi = mid + 5; }
+
+    // Верхняя строка: текущий шум слева, диапазон шкалы справа.
+    char buf[16];
+    display.setColor(UIColor::primary_txt);
+    snprintf(buf, sizeof(buf), "NF %d", (int)radio_driver.getNoiseFloor());
+    display.setCursor(0, plot_y - 9);
+    display.print(buf);
+    snprintf(buf, sizeof(buf), "%d..%d", hi, lo);
+    display.setCursor(display.width() - display.getTextWidth(buf), plot_y - 9);
+    display.print(buf);
+
+    // Линия: по одному столбцу на пиксель, разрыв там, где данных нет.
+    int prev_y = -1;
+    for (int i = 0; i < plot_w && i < DAY_COLS; i++) {
+      if (!day_cnt[i]) { prev_y = -1; continue; }
+      int y = y_bot - (day_val[i] - lo) * (y_bot - y_top) / (hi - lo);
+      if (y < y_top) y = y_top;
+      if (y > y_bot) y = y_bot;
+      if (prev_y < 0) {
+        display.fillRect(i, y, 1, 1);
+      } else {
+        const int top = (y < prev_y) ? y : prev_y;
+        const int bot = (y < prev_y) ? prev_y : y;
+        display.fillRect(i, top, 1, bot - top + 1);
+      }
+      prev_y = y;
+    }
+
+    // Где мы сейчас — пунктирный столбец.
+    const int minute = dayMinuteOfDay();
+    if (minute >= 0) {
+      const int now_px = minute * plot_w / 1440;
+      if (now_px >= 0 && now_px < plot_w) {
+        for (int y = y_top; y <= y_bot; y += 2) display.fillRect(now_px, y, 1, 1);
+      }
+    }
+
+    // Нижняя полоса: часы интервалами, стенки через каждые 6 часов.
+    display.setColor(UIColor::primary_txt);
+    display.fillRect(0, foot_y, display.width(), 10);
+    display.setColor(UIColor::window_bkg);
+    for (int h = 6; h < 24; h += 6) {
+      display.fillRect(h * display.width() / 24, foot_y, 1, 10);
+    }
+    static const char* kHourMarks[4] = { "00", "06", "12", "18" };
+    for (int k = 0; k < 4; k++) {
+      display.setCursor(k * 32 + 1, foot_y + 1);
+      display.print(kHourMarks[k]);
+    }
+    display.setColor(UIColor::primary_txt);
+  }
 
   // Копит шумовой пол и SNR. Вызывается из UITask::loop() каждый цикл,
   // независимо от того, что на экране.
@@ -398,6 +532,32 @@ class HomeScreen : public UIScreen {
       if (snr_count < NOISE_SAMPLES) snr_count++;
       snr_acc = 0.0f;
       snr_acc_n = 0;
+    }
+
+    // --- суточный график: одно значение в 10 секунд -------------------------
+    // Нода просыпается по прерываниям, поэтому отсчёт берём не чаще 500 мс и
+    // закрываем окно по реальному времени, а не по числу отсчётов.
+    const uint32_t now_ms = millis();
+    if ((int32_t)(now_ms - day_acc_next) >= 0) {
+      day_acc_next = now_ms + DAY_ACC_MILLIS;
+      const int16_t nf = (int16_t)radio_driver.getNoiseFloor();
+      // Пока ядро не измерило пол, там ноль: такие отсчёты не копим, иначе
+      // первые секунды после старта рисуются нулём и шкала уезжает.
+      if (nf >= 0) {
+        day_acc = 0.0f;
+        day_acc_n = 0;
+        day_win_start = now_ms;
+      } else {
+        if (day_acc_n == 0) day_win_start = now_ms;
+        day_acc += (float)nf;
+        day_acc_n++;
+        if ((uint32_t)(now_ms - day_win_start) >= DAY_AVG_MILLIS) {
+          foldDaySample(day_acc / (float)day_acc_n);
+          day_acc = 0.0f;
+          day_acc_n = 0;
+          day_win_start = now_ms;
+        }
+      }
     }
   }
 
@@ -1743,6 +1903,13 @@ public:
     } else if (_page == HomePage::NOISE) {
       display.setTextSize(1);
 
+      // Суточный график — третья страница той же стопки. Столбец живёт
+      // 11 минут, поэтому чаще раза в минуту перерисовывать нечего.
+      if (noise_mode == 2) {
+        renderNoiseDay(display);
+        return 60000;
+      }
+
       // The core recomputes the floor every NOISE_FLOOR_CALIB_INTERVAL and keeps
       // it cached, so reading it never touches the radio. The trace step comes
       // from Settings (NF Speed): the window covers ~6 s at 100 ms and ~64 s at
@@ -1751,9 +1918,9 @@ public:
       // Данные копит serviceNoise() в UITask::loop() — здесь только рисуем,
       // поэтому график не зависит от того, открыта ли страница.
 
-      const int16_t* hist = noise_show_snr ? snr_hist : noise_hist;
-      const uint8_t hist_head = noise_show_snr ? snr_head : noise_head;
-      const uint8_t hist_count = noise_show_snr ? snr_count : noise_count;
+      const int16_t* hist = (noise_mode == 1) ? snr_hist : noise_hist;
+      const uint8_t hist_head = (noise_mode == 1) ? snr_head : noise_head;
+      const uint8_t hist_count = (noise_mode == 1) ? snr_count : noise_count;
 
       // Auto-scale to the smoothed series, not the raw one: a three-point
       // average never reaches the raw extremes, so scaling to those would
@@ -1819,7 +1986,7 @@ public:
       // только перед положительным числом: у отрицательного знак минус уже
       // отделяет, а лишний пробел вылезает за стенку.
       char c1[16], c2[16], c3[16];
-      if (noise_show_snr) {
+      if (noise_mode == 1) {
         const float v_cur = radio_driver.getLastSNR();
         const float v_max = real_hi / 10.0f;
         const float v_min = real_lo / 10.0f;
@@ -1834,7 +2001,7 @@ public:
       display.setColor(UIColor::primary_txt);
       display.fillRect(0, foot_y, display.width(), 10);
       display.setColor(UIColor::window_bkg);
-      if (noise_show_snr) {
+      if (noise_mode == 1) {
         display.fillRect(54, foot_y, 1, 10);
         display.fillRect(91, foot_y, 1, 10);
         display.setCursor(0, foot_y + 1);  display.print(c1);
@@ -2481,10 +2648,10 @@ public:
       return true;
     }
 #if UI_NOISE_PAGE == 1 && defined(UI_DARKTEC_SETTINGS)
-    // Долгое нажатие на экране шума переключает кривую: шумовой пол ↔ SNR.
+    // Долгое нажатие на экране шума листает стопку: шум → SNR → сутки → шум.
     // Скорость дорожки листается тройным нажатием (см. UITask::handleTripleClick).
     if (c == KEY_ENTER && _page == HomePage::NOISE) {
-      noise_show_snr = !noise_show_snr;
+      noise_mode = (uint8_t)((noise_mode + 1) % 3);
       // Таймер шумового пола не трогаем: его тик идёт своим чередом, а кадр
       // перерисуется на ближайшем render. Раньше здесь стоял сброс в 0 —
       // после него страница переставала обновляться.
