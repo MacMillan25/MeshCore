@@ -33,7 +33,7 @@ struct Settings {
   uint8_t module;         // ModuleCode
   uint8_t auto_off_idx;   // 0=15s, 1=30s, 2=1m, 3=5m, 4=1h
   uint8_t noise_idx;      // 0=100ms, 1=250ms, 2=500ms, 3=1000ms (в памяти, не в файле)
-  uint8_t capacity_mode;  // CapacityMode: 0=UserPref, 1=3000, 2=4000
+  uint8_t capacity_mode;  // CapacityMode: 0=UserPref, 1=3000, 2=4000, 3=RealCap
   uint8_t brightness;     // BrightnessLevel: 0=Dim, 1=Normal, 2=Bright
   uint8_t bar_value;      // BarValue: что показывать в мини-баре заставки
   uint8_t low_batt_mv100; // порог отключения по низкому напряжению, в 100 мВ; 0 = штатный 3.40 В
@@ -49,14 +49,23 @@ enum BarValue : uint8_t {
 };
 constexpr uint8_t kBarValueCount = 2;
 
-// Откуда брать ёмкость. В меню листаются три пункта; UserPref — значение,
-// которое задаёт прошивальщик (capacity_mah), 3000/4000 — фиксированные.
+// Откуда брать ёмкость. В меню листаются четыре пункта в порядке
+// kCapacityOrder: RealCap → пользовательская (capacity_mah, её задаёт
+// прошивальщик) → 4000 → 3000. Значения enum — это то, что лежит в файле,
+// поэтому они стабильны и не совпадают с порядком в меню.
 enum CapacityMode : uint8_t {
   CAP_USER = 0,
   CAP_3000 = 1,
   CAP_4000 = 2,
+  CAP_REAL = 3,   // измеренная ёмкость пакета (RealCap)
 };
-constexpr uint8_t kCapacityModeCount = 3;
+constexpr uint8_t kCapacityModeCount = 4;
+
+// Порядок листания в меню и в CLI.
+inline const uint8_t* capacityOrder() {
+  static const uint8_t kOrder[kCapacityModeCount] = { CAP_REAL, CAP_USER, CAP_4000, CAP_3000 };
+  return kOrder;
+}
 
 // Яркость экрана: три уровня, в меню называются словами, а не цифрами.
 // Значение — это аппаратный контраст SSD1306 (команда 0x81, 0..255).
@@ -86,10 +95,15 @@ constexpr uint8_t kPayloadSize = 19;
 
 inline void sanitize(Settings& s);
 
-// Фактическая ёмкость пакета: UserPref или фиксированная 3000/4000.
+// Фактическая ёмкость пакета: RealCap, пользовательская или фиксированная.
+// Режим RealCap до первого полного цикла опирается на пользовательскую
+// ёмкость: подставлять 4000 вслепую — значит врать про запас на 3000-банке.
 inline uint16_t effectiveCapacityMah(const Settings& s) {
   if (s.capacity_mode == CAP_3000) return 3000;
   if (s.capacity_mode == CAP_4000) return 4000;
+  if (s.capacity_mode == CAP_REAL) {
+    return s.real_cap_mah ? s.real_cap_mah : s.capacity_mah;
+  }
   return s.capacity_mah;
 }
 

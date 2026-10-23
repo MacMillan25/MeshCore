@@ -483,12 +483,14 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
     const char* v = &command[20];
     if (memcmp(v, "user", 4) == 0) {
       s.capacity_mode = DarktecPrefsFormat::CAP_USER;
+    } else if (memcmp(v, "real", 4) == 0) {
+      s.capacity_mode = DarktecPrefsFormat::CAP_REAL;
     } else if (atoi(v) == 3000) {
       s.capacity_mode = DarktecPrefsFormat::CAP_3000;
     } else if (atoi(v) == 4000) {
       s.capacity_mode = DarktecPrefsFormat::CAP_4000;
     } else {
-      strcpy(reply, "Error: capmode user|3000|4000");
+      strcpy(reply, "Error: capmode real|user|3000|4000");
       return true;
     }
     DarktecPrefs::save(s);
