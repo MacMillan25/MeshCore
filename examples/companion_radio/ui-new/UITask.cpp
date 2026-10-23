@@ -514,8 +514,11 @@ class HomeScreen : public UIScreen {
     const int minute = dayMinuteOfDay();
     if (minute < 0 || minute > 1439) return;
 
-    // Смена суток — начинаем график заново.
-    if (day_last_min >= 0 && minute < day_last_min - 1) {
+    // Смена суток — начинаем график заново. Условие — именно перескок через
+    // полночь, а не «минута стала меньше»: коррекция часов назад (синхронизация
+    // с приложением или GPS на пару минут) раньше стирала накопленный день,
+    // и график выглядел рваным. Полночь — это откат почти на 1440 минут.
+    if (day_last_min >= 0 && minute + 720 < day_last_min) {
       memset(day_val, 0, sizeof(day_val));
       memset(day_cnt, 0, sizeof(day_cnt));
     }
@@ -668,22 +671,21 @@ class HomeScreen : public UIScreen {
       day_acc_next = now_ms + DAY_ACC_MILLIS;
       const int16_t nf = (int16_t)radio_driver.getNoiseFloor();
       noteChannelSample();   // занятость канала для второй страницы «радио»
-      // Пока ядро не измерило пол, там ноль: такие отсчёты не копим, иначе
-      // первые секунды после старта рисуются нулём и шкала уезжает.
-      if (nf >= 0) {
-        day_acc = 0.0f;
-        day_acc_n = 0;
-        day_win_start = now_ms;
-      } else {
+      // Пока ядро не измерило пол, там ноль: такие отсчёты не копим. Раньше
+      // окно при этом ещё и сбрасывалось — серия нулей (например, после resetAGC)
+      // съедала целые столбцы, и суточный график выходил рваным. Теперь просто
+      // пропускаем отсчёт, а окно закрываем по времени, как только в нём есть
+      // хотя бы один настоящий замер.
+      if (nf < 0) {
         if (day_acc_n == 0) day_win_start = now_ms;
         day_acc += (float)nf;
         day_acc_n++;
-        if ((uint32_t)(now_ms - day_win_start) >= DAY_AVG_MILLIS) {
-          foldDaySample(day_acc / (float)day_acc_n);
-          day_acc = 0.0f;
-          day_acc_n = 0;
-          day_win_start = now_ms;
-        }
+      }
+      if (day_acc_n > 0 && (uint32_t)(now_ms - day_win_start) >= DAY_AVG_MILLIS) {
+        foldDaySample(day_acc / (float)day_acc_n);
+        day_acc = 0.0f;
+        day_acc_n = 0;
+        day_win_start = now_ms;
       }
     }
   }
