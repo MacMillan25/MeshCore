@@ -30,8 +30,8 @@
 namespace darktec {
 
 // Индексы модулей — порядок обязан совпадать с таблицами в DarktecPowerTables.h.
-// Профиль LR2021 заведён отдельно, но токов для него пока нет: считаем по
-// E22-900M33S (та же мощность 1 Вт). Как снимутся замеры — заменить массивы.
+// LR2021F33-2G4 замерен 23.10.2026: покой, экран, заставка и TX 22 dBm; остальные
+// мощности TX пока расчётные (пропорция от 33S по замеру на 22 dBm).
 enum PowerModule : uint8_t {
   MODULE_E22_900M33S  = 0,
   MODULE_E22_900M30S  = 1,
@@ -496,8 +496,8 @@ private:
       case MODULE_E22_900M30S:  return E22_900M30S_TX_MA;
       case MODULE_HT_RA62:      return HT_RA62_TX_MA;
       case MODULE_E22P_868M30S: return E22P_868M30S_TX_MA;
-      // LR2021 (1 Вт): пока по 33S — токов не снимали.
-      case MODULE_LR2021_1W:    return E22_900M33S_TX_MA;
+      // LR2021 (1 Вт): 22 dBm замерен, остальные мощности — расчёт от 33S.
+      case MODULE_LR2021_1W:    return LR2021_1W_TX_MA;
       default:                  return E22_900M33S_TX_MA;
     }
   }
@@ -515,7 +515,9 @@ private:
       case MODULE_E22P_868M30S:
         off = E22P_868M30S_IDLE_OFF_MA; saver = E22P_868M30S_IDLE_SAVER_MA; on = E22P_868M30S_IDLE_ON_MA;
         break;
-      case MODULE_LR2021_1W:   // замеров нет — токи покоя как у 33S
+      case MODULE_LR2021_1W:
+        off = LR2021_1W_IDLE_OFF_MA; saver = LR2021_1W_IDLE_SAVER_MA; on = LR2021_1W_IDLE_ON_MA;
+        break;
       default:
         off = E22_900M33S_IDLE_OFF_MA; saver = E22_900M33S_IDLE_SAVER_MA; on = E22_900M33S_IDLE_ON_MA;
         break;
