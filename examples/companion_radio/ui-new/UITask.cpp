@@ -424,6 +424,11 @@ class HomeScreen : public UIScreen {
       DarktecPrefs::Settings s = DarktecPrefs::get();
       s.real_cap_mah = board.getRealCapacityMah();
       DarktecPrefs::save(s);
+      // Если ёмкость берётся из RealCap, новый замер сразу идёт в модель:
+      // иначе остаток и ETA жили бы на старой цифре до перезагрузки.
+      if (s.capacity_mode == DarktecPrefsFormat::CAP_REAL) {
+        board.setBatteryCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(s));
+      }
     }
   }
 
@@ -1284,12 +1289,15 @@ public:
       const DarktecPrefs::Settings& s = DarktecPrefs::get();
       char raw[20] = "";
       if (i == 0) {
-        // Ёмкость: 4000 → 3000 → пользовательская. Пользовательская
-        // показывается тем числом, которое задал прошивальщик.
+        // Ёмкость: RealCap → пользовательская → 4000 → 3000. В режиме RealCap
+        // печатаем слово, а не цифру: измеренная ёмкость видна на странице ETA,
+        // а в меню важно, откуда берётся значение.
         if (s.capacity_mode == DarktecPrefsFormat::CAP_4000) {
           snprintf(raw, sizeof(raw), "4000 mAh");
         } else if (s.capacity_mode == DarktecPrefsFormat::CAP_3000) {
           snprintf(raw, sizeof(raw), "3000 mAh");
+        } else if (s.capacity_mode == DarktecPrefsFormat::CAP_REAL) {
+          snprintf(raw, sizeof(raw), "RealCap");
         } else {
           snprintf(raw, sizeof(raw), "%u mAh", (unsigned)s.capacity_mah);
         }
@@ -1497,12 +1505,23 @@ public:
     if (page == SettingsPage::DARKTEC_PAGE) {
       DarktecPrefs::Settings s = DarktecPrefs::get();
       if (i == 0) {
-        // 4000 → 3000 → пользовательская → 4000. Модель сразу получает ту
+        // RealCap → пользовательская → 4000 → 3000 (порядок в kCapacityOrder,
+        // значения enum в файле от него не зависят). Модель сразу получает ту
         // ёмкость, которая выбрана: от неё считаются остаток и ETA.
         const uint8_t n = DarktecPrefsFormat::kCapacityModeCount;
-        s.capacity_mode = (uint8_t)(fwd ? (s.capacity_mode + n - 1) % n
-                                        : (s.capacity_mode + 1) % n);
+        const uint8_t* order = DarktecPrefsFormat::capacityOrder();
+        uint8_t cur = 0;
+        for (uint8_t k = 0; k < n; k++) {
+          if (order[k] == s.capacity_mode) cur = k;
+        }
+        cur = (uint8_t)(fwd ? (cur + 1) % n : (cur + n - 1) % n);
+        s.capacity_mode = order[cur];
         board.setBatteryCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(s));
+        // В режиме RealCap до первого полного цикла берётся пользовательская
+        // ёмкость — скажем об этом, иначе выбор выглядит как «ничего не произошло».
+        if (s.capacity_mode == DarktecPrefsFormat::CAP_REAL && s.real_cap_mah == 0) {
+          darktecNote(i, "no cap yet");
+        }
       } else if (i == 1) {
         const uint8_t n = DarktecPrefsFormat::kAutoOffCount;
         s.auto_off_idx = fwd ? (s.auto_off_idx + 1) % n
