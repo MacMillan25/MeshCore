@@ -129,7 +129,7 @@ TEST(DarktecPrefsFormatTest, ReadsVersion1AndRemapsModules) {
     buf[9] = old_module;
     buf[10] = 0xD0; buf[11] = 0x07;  // 2000 mA
     for (int i = 0; i < 6; i++) buf[12 + i] = 0;
-    const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
+    const uint16_t crc = crc16(buf + 4, 1 + kPayloadLegacy);
     buf[18] = (uint8_t)(crc & 0xFF);
     buf[19] = (uint8_t)(crc >> 8);
   };
@@ -160,7 +160,7 @@ TEST(DarktecPrefsFormatTest, ReadsVersion2AsUserCapacity) {
 
   buf[4] = 2;   // подменяем версию на старую
   buf[10] = 0;  // в v2 это был резерв
-  const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
+  const uint16_t crc = crc16(buf + 4, 1 + kPayloadLegacy);
   buf[18] = (uint8_t)(crc & 0xFF);
   buf[19] = (uint8_t)(crc >> 8);
 
@@ -178,7 +178,7 @@ TEST(DarktecPrefsFormatTest, ReadsVersion3WithDefaultBrightness) {
   ASSERT_EQ(serialize(in, buf, sizeof(buf)), kWireSize);
   buf[4] = 3;    // подменяем версию на старую
   buf[11] = 0;   // в v3 это был резерв
-  const uint16_t crc = crc16(buf + 4, 1 + kPayloadSize);
+  const uint16_t crc = crc16(buf + 4, 1 + kPayloadLegacy);
   buf[18] = (uint8_t)(crc & 0xFF);
   buf[19] = (uint8_t)(crc >> 8);
 
@@ -186,6 +186,71 @@ TEST(DarktecPrefsFormatTest, ReadsVersion3WithDefaultBrightness) {
   ASSERT_TRUE(parse(buf, kWireSize, out));
   EXPECT_EQ(out.capacity_mode, CAP_USER);
   EXPECT_EQ(out.brightness, BRI_HIGH);
+}
+
+// v6: нижняя точка старта RealCap и отметка «разрядились» переживают запись.
+TEST(DarktecPrefsFormatTest, RealCapFieldsRoundTrip) {
+  Settings in{};
+  in.real_cap_mah = 3210;
+  in.real_cap_low_idx = RCAP_LOW_3200;
+  in.saw_empty = 1;
+
+  uint8_t buf[32];
+  const size_t n = serialize(in, buf, sizeof(buf));
+  ASSERT_EQ(n, kWireSize);
+
+  Settings out{};
+  ASSERT_TRUE(parse(buf, n, out));
+  EXPECT_EQ(out.real_cap_mah, 3210);
+  EXPECT_EQ(out.real_cap_low_idx, RCAP_LOW_3200);
+  EXPECT_EQ(out.saw_empty, 1);
+}
+
+TEST(DarktecPrefsFormatTest, RealCapLowMvTable) {
+  EXPECT_EQ(realCapLowMv(RCAP_LOW_3000), 3000);
+  EXPECT_EQ(realCapLowMv(RCAP_LOW_3200), 3200);
+  EXPECT_EQ(realCapLowMv(RCAP_LOW_3400), 3400);
+  EXPECT_EQ(realCapLowMv(99), 3400);   // мусор — бережный порог
+
+  Settings s{};
+  s.real_cap_low_idx = 99;
+  s.saw_empty = 7;
+  sanitize(s);
+  EXPECT_EQ(s.real_cap_low_idx, RCAP_LOW_3400);
+  EXPECT_EQ(s.saw_empty, 1);
+}
+
+TEST(DarktecPrefsFormatTest, EffectiveCapacityRealCapFallsBack) {
+  Settings s{};
+  s.capacity_mah = 4500;
+  s.capacity_mode = CAP_REAL;
+
+  s.real_cap_mah = 0;       // ещё не измеряли — берём пользовательскую
+  EXPECT_EQ(effectiveCapacityMah(s), 4500);
+
+  s.real_cap_mah = 3210;    // измерена — берём её
+  EXPECT_EQ(effectiveCapacityMah(s), 3210);
+}
+
+// Старый файл v5 (26 байт, без новых полей) читается: новые поля — дефолты.
+TEST(DarktecPrefsFormatTest, ReadsVersion5WithRealCapDefaults) {
+  Settings in{};
+  in.capacity_mah = 4000;
+  uint8_t buf[32];
+  ASSERT_EQ(serialize(in, buf, sizeof(buf)), kWireSize);
+
+  buf[4] = 5;
+  buf[24] = 0;
+  buf[25] = 0;
+  const uint16_t crc = crc16(buf + 4, 1 + kPayloadLegacy);
+  buf[24] = (uint8_t)(crc & 0xFF);   // в v5 контрольная сумма лежала здесь
+  buf[25] = (uint8_t)(crc >> 8);
+
+  Settings out{};
+  ASSERT_TRUE(parse(buf, kWireSize, out));
+  EXPECT_EQ(out.capacity_mah, 4000);
+  EXPECT_EQ(out.real_cap_low_idx, RCAP_LOW_3400);  // дефолт v6
+  EXPECT_EQ(out.saw_empty, 0);
 }
 
 int main(int argc, char** argv) {

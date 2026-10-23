@@ -241,9 +241,15 @@ void DarktecBoard::begin() {
     // в main() идёт уже после board.begin(), поэтому стендовое значение из
     // prefs успевает подхватиться и переживает перезагрузку.
     LowBattGuard::set((uint16_t)p.low_batt_mv100 * 100);
-    // Ёмкость — с учётом режима UserPref/3000/4000: от неё масштабируются
+    // Ёмкость — с учётом режима UserPref/3000/4000/RealCap: от неё масштабируются
     // остаток и ETA в модели.
     _pm.setCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(p));
+    // Цикл измерения ёмкости: нижняя точка и отметка «уже разрядились».
+    // Отметка переживает перезагрузку — на 3.4 В нода может выключиться
+    // раньше, чем воткнут зарядник. Модуль на этой ветке всегда LR2021,
+    // поэтому setModule из prefs не зовём.
+    _pm.setRealCapLowMv(DarktecPrefsFormat::realCapLowMv(p.real_cap_low_idx));
+    _pm.setSawEmpty(p.saw_empty != 0);
 }
 
 // Opens the INA3221 on first use and makes sure every channel we read has the
@@ -514,6 +520,22 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
     DarktecPrefs::save(s);
     setBatteryCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(s));
     sprintf(reply, "OK - %d mAh", mah);
+    return true;
+  }
+  if (memcmp(command, "set darktec.caplow ", 19) == 0) {
+    const uint16_t mv = (uint16_t)(atof(&command[19]) * 1000.0f + 0.5f);
+    uint8_t idx;
+    if (mv == 3000)      idx = DarktecPrefsFormat::RCAP_LOW_3000;
+    else if (mv == 3200) idx = DarktecPrefsFormat::RCAP_LOW_3200;
+    else if (mv == 3400) idx = DarktecPrefsFormat::RCAP_LOW_3400;
+    else {
+      strcpy(reply, "Error: caplow 3.0|3.2|3.4");
+      return true;
+    }
+    s.real_cap_low_idx = idx;
+    DarktecPrefs::save(s);
+    setRealCapLowMv(mv);
+    sprintf(reply, "OK - %u mV", (unsigned)mv);
     return true;
   }
   if (memcmp(command, "set darktec.capmode ", 20) == 0) {
