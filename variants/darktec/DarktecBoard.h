@@ -271,6 +271,13 @@ public:
     return _pm.currentNowMa(_txing);
   }
 
+  // Нижняя точка цикла RealCap: 3.0 / 3.2 / 3.4 В (выбирается в меню).
+  void setRealCapLowMv(uint16_t mv) { _pm.setRealCapLowMv(mv); }
+  uint16_t getRealCapLowMv() const { return _pm.realCapLowMv(); }
+  // Отметка «разрядились до порога»: модель поднимает флаг, UI пишет в prefs.
+  bool takeRealCapSawEmptyDirty() { return _pm.takeSawEmptyDirty(); }
+  bool getRealCapSawEmpty() const { return _pm.sawEmpty(); }
+
   // Модуль и мощность передатчика: то, чем модель различает железо.
   // Вызывается и из UI компаньона, и из CLI — чтобы у всех ролей было одно.
   void setPowerModel(uint8_t module, int8_t tx_dbm, float capacity_mah) {

@@ -57,6 +57,13 @@ static const float CHARGE_TAIL_MA = 150.0f;
 // Минимум для среднего тока в ETA: не даём прогнозу раздуться на спаде.
 static const float CHARGE_ETA_MIN_MA = 150.0f;
 
+// --- Измеренная ёмкость (RealCap) -------------------------------------------
+// Конец заливки: ток пакета (измеренный) ниже 200 мА — значит CV-хвост, считать
+// дальше нечего, за это время в банку уходит всё меньше.
+static const float REAL_CAP_END_MA = 200.0f;
+// Накоплено меньше — считаем шумом/сбоем и ёмкость не обновляем.
+static const float REAL_CAP_MIN_MAH = 500.0f;
+
 // Сглаживание показаний. Замеры идут раз в 250 мс, а АЦП шумит на пару
 // милливольт — в полке кривой это доли процента, но остаток и ETA от них
 // дёргаются. Экспоненциальное сглаживание убирает дрожь, не мешая реальному
@@ -125,19 +132,33 @@ public:
     _charging = charging;
 
     // --- измеренная ёмкость ---------------------------------------------
-    // Цикл считается полным, если перед зарядкой разрядились до 3.0 В, а в
-    // конце дошли до 4.15 В при токе ниже хвостовых 150 мА. Тогда заряд
-    // сессии и есть реальная ёмкость пакета.
-    if (!charging && batt_mv <= 3000) { _saw_empty = true; _real_cap_acc = 0.0f; }
+    // Цикл считается полным, если перед зарядкой разрядились до выбранного
+    // порога (3.0/3.2/3.4 В), а в конце дошли до 4.15 В при измеренном токе
+    // ниже REAL_CAP_END_MA. Тогда заряд сессии и есть реальная ёмкость.
+    //
+    // Порог сравниваем с напряжением ПОКОЯ (_ocv_mv), а не с сырым замером:
+    // под передачей клеммы просаживаются на сотни милливольт, и на почти
+    // пустой банке сырой замер ложно «касался» бы порога.
+    if (!charging && _ocv_mv > 0 && _ocv_mv <= _real_cap_low_mv) {
+      if (!_saw_empty) { _saw_empty = true; _saw_empty_dirty = true; }
+      _real_cap_acc = 0.0f;
+    }
     if (charging) {
       if (!_real_cap_tracking) { _real_cap_tracking = true; _real_cap_last_ms = now_ms; }
       const uint32_t dtc = now_ms - _real_cap_last_ms;
       _real_cap_last_ms = now_ms;
-      if (dtc > 0 && dtc <= 60000) _real_cap_acc += i_abs * ((float)dtc / 3600000.0f);
-      if (_saw_empty && batt_mv >= 4150 && i_abs < 150.0f && _real_cap_acc > 500.0f) {
+      // INA видит весь ток, который идёт от зарядника, а нода в это время
+      // питается от него же. В банку попадает разница: ток заряда минус
+      // собственное потребление (его модель знает по таблицам).
+      float net_ma = i_abs - currentNowMa(radio_active);
+      if (net_ma < 0.0f) net_ma = 0.0f;
+      if (dtc > 0 && dtc <= 60000) _real_cap_acc += net_ma * ((float)dtc / 3600000.0f);
+      if (_saw_empty && batt_mv >= 4150 && i_abs < REAL_CAP_END_MA &&
+          _real_cap_acc > REAL_CAP_MIN_MAH) {
         _real_cap_mah = (uint16_t)(_real_cap_acc + 0.5f);
         _real_cap_dirty = true;
         _saw_empty = false;
+        _saw_empty_dirty = true;
       }
     } else {
       _real_cap_tracking = false;
@@ -185,6 +206,13 @@ public:
   uint16_t getRealCapMah() const { return _real_cap_mah; }
   void     setRealCapMah(uint16_t v) { _real_cap_mah = v; }
   bool     takeRealCapDirty() { bool d = _real_cap_dirty; _real_cap_dirty = false; return d; }
+
+  // Нижняя точка старта цикла RealCap (3.0/3.2/3.4 В) и отметка «уже разрядились».
+  void     setRealCapLowMv(uint16_t mv) { _real_cap_low_mv = mv; }
+  uint16_t realCapLowMv() const { return _real_cap_low_mv; }
+  bool     sawEmpty() const { return _saw_empty; }
+  void     setSawEmpty(bool v) { _saw_empty = v; _saw_empty_dirty = false; }
+  bool     takeSawEmptyDirty() { bool d = _saw_empty_dirty; _saw_empty_dirty = false; return d; }
   float getBattCurrentMa() const { return _batt_current_ma; }
   // Был ли хоть один замер тока: до первого замера UI нечего показывать.
   bool isCurrentKnown() const { return _current_known; }
@@ -349,8 +377,10 @@ private:
   bool     _soc_valid = false;
   bool     _charging = false;
 
-  // измеренная ёмкость: флаг «разрядились до 3.0 В» и накопитель заряда
+  // измеренная ёмкость: флаг «разрядились до порога» и накопитель заряда
   bool     _saw_empty = false;
+  bool     _saw_empty_dirty = false;   // отметка изменилась — надо сохранить в prefs
+  uint16_t _real_cap_low_mv = 3400;    // нижняя точка старта цикла, мВ
   bool     _real_cap_tracking = false;
   bool     _real_cap_dirty = false;
   float    _real_cap_acc = 0.0f;
