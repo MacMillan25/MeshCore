@@ -1044,7 +1044,7 @@ public:
     switch (page) {
 #ifdef UI_DARKTEC_SETTINGS
       case SettingsPage::ROOT:    return 6;   // + [ Darktec ]
-      case SettingsPage::DARKTEC_PAGE: return 9;   // 7 параметров + RAM + "Back"
+      case SettingsPage::DARKTEC_PAGE: return 10;  // 8 параметров + RAM + "Back"
 #else
       case SettingsPage::ROOT:    return 5;
 #endif
@@ -1116,20 +1116,21 @@ public:
     }
 #ifdef UI_DARKTEC_SETTINGS
     else if (page == SettingsPage::DARKTEC_PAGE) {
-      // Своя строка выхода внизу списка (как в официалке): i==8 — "Back",
-      // пункты — i==0..7. Без стрелки: курсор ">" рядом с "<" сливается.
-      if (i == 8) return "Back";
-      if (i == 7) return "RAM";   // число — значением, печатается по правому краю
+      // Своя строка выхода внизу списка (как в официалке): i==9 — "Back",
+      // пункты — i==0..8. Без стрелки: курсор ">" рядом с "<" сливается.
+      if (i == 9) return "Back";
+      if (i == 8) return "RAM";   // число — значением, печатается по правому краю
       if (i == _darktec_note_item && _darktec_note[0] && millis() < _darktec_note_until) {
         return _darktec_note;
       }
       if (i == 0) return "Capacity";
       if (i == 1) return "Cap low";
       if (i == 2) return "Screen on";
-      if (i == 3) return "Brightness";
-      if (i == 4) return "Bar";
-      if (i == 5) return "V-Cut";
-      if (i == 6) return "Radio mod";
+      if (i == 3) return "Chg screen";
+      if (i == 4) return "Brightness";
+      if (i == 5) return "Bar";
+      if (i == 6) return "V-Cut";
+      if (i == 7) return "Radio mod";
     }
 #endif
     else if (i == 0) {
@@ -1318,25 +1319,29 @@ public:
         static const char* on_names[DarktecPrefsFormat::kAutoOffCount] = { "15s", "30s", "1m", "5m", "1h" };
         snprintf(raw, sizeof(raw), "%s", on_names[s.auto_off_idx < DarktecPrefsFormat::kAutoOffCount ? s.auto_off_idx : 0]);
       } else if (i == 3) {
+        // Экран на зарядке: Stay — не гаснет, пока есть шнур; Off — гаснет
+        // по таймауту «Screen on», как без питания.
+        snprintf(raw, sizeof(raw), "%s", s.chg_screen_off ? "Off" : "Stay");
+      } else if (i == 4) {
         // Яркость: Low / Mid / High — словами, не цифрами.
         static const char* bri_names[DarktecPrefsFormat::kBrightnessCount] =
             { "Low", "Mid", "High" };
         snprintf(raw, sizeof(raw), "%s",
                  bri_names[s.brightness < DarktecPrefsFormat::kBrightnessCount
                                ? s.brightness : DarktecPrefsFormat::BRI_HIGH]);
-      } else if (i == 4) {
+      } else if (i == 5) {
         // Что показывать в мини-баре заставки: шумовой пол или заряд.
         snprintf(raw, sizeof(raw), "%s",
                  (s.bar_value == DarktecPrefsFormat::BAR_PERCENT) ? "%" : "NF");
-      } else if (i == 5) {
+      } else if (i == 6) {
         // Порог отключения по низкому напряжению. 0 в prefs = штатные 3.40 В.
         const uint8_t v = s.low_batt_mv100 ? s.low_batt_mv100 : 34;
         snprintf(raw, sizeof(raw), "%u.%uV", (unsigned)(v / 10), (unsigned)(v % 10));
-      } else if (i == 6) {
+      } else if (i == 7) {
         // Порядок обязан совпадать с DarktecPrefsFormat::ModuleCode.
         static const char* mod_names[4] = { "E22-33S", "E22-30S", "RA62", "E22P" };
         snprintf(raw, sizeof(raw), "%s", mod_names[s.module < 4 ? s.module : 0]);
-      } else if (i == 7) {
+      } else if (i == 8) {
         // Свободная память: только смотрится. Печатается значением, поэтому
         // строка меню right-align'ит число у правого края экрана.
         snprintf(raw, sizeof(raw), "%.1fK", (double)freeRamBytes() / 1024.0);
@@ -1548,6 +1553,11 @@ public:
         s.auto_off_idx = fwd ? (s.auto_off_idx + 1) % n
                              : (s.auto_off_idx + n - 1) % n;
       } else if (i == 3) {
+        // Экран на зарядке: Stay ⇄ Off. При Off время автоотключения больше
+        // не продлевается, пока есть шнур, — экран гаснет как обычно.
+        s.chg_screen_off = s.chg_screen_off ? 0 : 1;
+        darktecNote(i, s.chg_screen_off ? "off at timeout" : "stay on");
+      } else if (i == 4) {
         // Яркость: Dim (0) → Normal (128) → Bright (255). Применяется сразу:
         // это одна I2C-команда контраста, перезагрузка не нужна.
         const uint8_t n = DarktecPrefsFormat::kBrightnessCount;
@@ -1555,12 +1565,12 @@ public:
                                      : (s.brightness + n - 1) % n);
         DisplayDriver* d = _task->getDisplay();
         if (d) d->setContrast(DarktecPrefsFormat::brightnessContrast(s.brightness));
-      } else if (i == 4) {
+      } else if (i == 5) {
         // Мини-бар заставки: NF ↔ процент заряда.
         const uint8_t n = DarktecPrefsFormat::kBarValueCount;
         s.bar_value = (uint8_t)(fwd ? (s.bar_value + 1) % n
                                     : (s.bar_value + n - 1) % n);
-      } else if (i == 5) {
+      } else if (i == 6) {
         // Порог отключения: 3.4 → 3.0 → 2.5 → 2.0 → 1.0 В (в единицах 100 мВ).
         // Нужен для стенда: на ЛБП ниже 3.4 В нода иначе выключается.
         static const uint8_t kSteps[] = { 34, 30, 25, 20, 10 };
@@ -1574,12 +1584,12 @@ public:
         snprintf(note, sizeof(note), "OFF at %u.%uV",
                  (unsigned)(s.low_batt_mv100 / 10), (unsigned)(s.low_batt_mv100 % 10));
         darktecNote(i, note);
-      } else if (i == 6) {
+      } else if (i == 7) {
         s.module = fwd ? (s.module + 1) % 4 : (s.module + 3) % 4;
         board.setRadioModule(s.module);   // RF-тракт и ETA — сразу
-      } else if (i == 7) {
-        return;   // RAM: только показать, менять нечем
       } else if (i == 8) {
+        return;   // RAM: только показать, менять нечем
+      } else if (i == 9) {
         // Back — возврат в корень настроек (тот же переход, что у общей
         // строки i==0 на других подстраницах).
         _settings_page = SettingsPage::ROOT;
@@ -3883,12 +3893,16 @@ void UITask::loop() {
       _display->endFrame();
     }
 #if AUTO_OFF_MILLIS > 0
-#ifdef KEEP_DISPLAY_ON_USB
-    // Opt-in: refresh the auto-off deadline while externally powered, so the
-    // timer counts from the moment external power is removed. Off by default
-    // because OLED panels burn in quickly; only enable for LCD targets or
-    // where the display is replaceable.
-    if (board.isExternalPowered()) {
+#if defined(KEEP_DISPLAY_ON_USB) || defined(UI_DARKTEC_SETTINGS)
+    // Держим экран включённым, пока есть внешнее питание. В DarkTec это
+    // настройка меню «Chg screen»: Stay — держим (по умолчанию, как раньше),
+    // Off — не держим, и экран гаснет по таймауту, как без шнура.
+    // Заставку Always On это не ломает: она входит по тому же таймауту.
+    bool keep_on_power = true;
+  #ifdef UI_DARKTEC_SETTINGS
+    keep_on_power = (DarktecPrefs::get().chg_screen_off == 0);
+  #endif
+    if (keep_on_power && board.isExternalPowered()) {
       _auto_off = millis() + autoOffMillis();
     }
 #endif
