@@ -64,8 +64,12 @@ def run(cmd):
 
 def find_uf2(env, version):
     out = os.path.join("out", "uf2")
-    for name in os.listdir(out):
-        if name.startswith(env) and version in name and name.endswith(".uf2"):
+    # Префикс проверяем как "<env>-v", а не просто "<env>": имена ролей вложены
+    # друг в друга (Darktec_repeater и Darktec_repeater_bridge_rs232_serial1),
+    # и с простым startswith репитеру достался бы файл моста.
+    prefix = env + "-v"
+    for name in sorted(os.listdir(out)):
+        if name.startswith(prefix) and version in name and name.endswith(".uf2"):
             return os.path.join(out, name)
     raise SystemExit(f"Нет UF2 для {env} версии {version} — сначала собери скриптом build-darktec-uf2.ps1")
 
@@ -82,8 +86,8 @@ def find_zip(env, version):
         return fresh
     out = os.path.join("out", "uf2")
     if os.path.isdir(out):
-        for name in os.listdir(out):
-            if name.startswith(env) and version in name and name.endswith(".zip"):
+        for name in sorted(os.listdir(out)):
+            if name.startswith(env + "-v") and version in name and name.endswith(".zip"):
                 return os.path.join(out, name)
     raise SystemExit(f"Нет DFU-zip для {env} — собери `pio run -e {env}` (без -t create_uf2)")
 
