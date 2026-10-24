@@ -522,6 +522,18 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
     sprintf(reply, "OK - %d mAh", mah);
     return true;
   }
+  if (memcmp(command, "set darktec.chgscreen ", 22) == 0) {
+    const char* v = &command[22];
+    if (memcmp(v, "off", 3) == 0)       s.chg_screen_off = 1;
+    else if (memcmp(v, "stay", 4) == 0) s.chg_screen_off = 0;
+    else {
+      strcpy(reply, "Error: chgscreen stay|off");
+      return true;
+    }
+    DarktecPrefs::save(s);
+    sprintf(reply, "OK - %s", s.chg_screen_off ? "off at timeout" : "stay on");
+    return true;
+  }
   if (memcmp(command, "set darktec.caplow ", 19) == 0) {
     const uint16_t mv = (uint16_t)(atof(&command[19]) * 1000.0f + 0.5f);
     uint8_t idx;

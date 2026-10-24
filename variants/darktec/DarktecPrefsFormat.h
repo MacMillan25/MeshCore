@@ -42,6 +42,7 @@ struct Settings {
   uint32_t chrg_end_epoch; // Unix-время конца последней зарядки (0 = неизвестно)
   uint8_t real_cap_low_idx; // нижняя точка старта RealCap: 0=3.0, 1=3.2, 2=3.4 В
   uint8_t saw_empty;       // 1 = до порога разрядились, цикл RealCap начат (живёт в prefs)
+  uint8_t chg_screen_off;  // 1 = гасить экран на зарядке по таймауту, 0 = держать включённым
 };
 
 // Что показывать в мини-баре заставки «Always On».
@@ -106,11 +107,12 @@ inline uint16_t realCapLowMv(uint8_t idx) {
   return (idx < kRealCapLowCount) ? kMv[idx] : kMv[RCAP_LOW_3400];
 }
 
-constexpr uint8_t kWireVersion = 6;
-constexpr uint8_t kWireSize = 28;  // magic(4) + ver(1) + payload(21) + crc(2)
-constexpr uint8_t kPayloadSize = 21;
-// У версий 1..5 полезная часть была 19 байт — их CRC считается по ней.
+constexpr uint8_t kWireVersion = 7;
+constexpr uint8_t kWireSize = 29;  // magic(4) + ver(1) + payload(22) + crc(2)
+constexpr uint8_t kPayloadSize = 22;
+// У версий 1..5 полезная часть была 19 байт, у v6 — 21.
 constexpr uint8_t kPayloadLegacy = 19;
+constexpr uint8_t kPayloadV6 = 21;
 
 inline void sanitize(Settings& s);
 
@@ -159,6 +161,7 @@ inline void sanitize(Settings& s) {
   if (s.real_cap_mah > 20000) s.real_cap_mah = 0;      // мусор в файле — считаем «не измерено»
   if (s.real_cap_low_idx >= kRealCapLowCount) s.real_cap_low_idx = RCAP_LOW_3400;
   s.saw_empty = s.saw_empty ? 1 : 0;
+  s.chg_screen_off = s.chg_screen_off ? 1 : 0;
 }
 
 // CRC16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
@@ -210,9 +213,11 @@ inline size_t serialize(const Settings& s, uint8_t* buf, size_t len) {
   // чем начнётся заряд, и без неё цикл после перезагрузки начинался бы заново.
   buf[24] = t.real_cap_low_idx;
   buf[25] = t.saw_empty;
+  // v7: гасить ли экран на зарядке по таймауту.
+  buf[26] = t.chg_screen_off;
   const uint16_t crc2 = crc16(buf + 4, 1 + kPayloadSize);
-  buf[26] = (uint8_t)(crc2 & 0xFF);
-  buf[27] = (uint8_t)(crc2 >> 8);
+  buf[27] = (uint8_t)(crc2 & 0xFF);
+  buf[28] = (uint8_t)(crc2 >> 8);
   return kWireSize;
 }
 
@@ -317,9 +322,9 @@ inline bool parseV5(const uint8_t* buf, size_t len, Settings& out) {
 
 // v6: добавились нижняя точка старта RealCap и отметка «разрядились до неё».
 inline bool parseV6(const uint8_t* buf, size_t len, Settings& out) {
-  if (len < kWireSize) return false;
+  if (len < 28) return false;
   const uint16_t crc_stored = (uint16_t)(buf[26] | ((uint16_t)buf[27] << 8));
-  if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
+  if (crc16(buf + 4, 1 + kPayloadV6) != crc_stored) return false;
   Settings s{};
   s.capacity_mah = (uint16_t)(buf[5] | ((uint16_t)buf[6] << 8));
   s.module = buf[7];
@@ -341,6 +346,33 @@ inline bool parseV6(const uint8_t* buf, size_t len, Settings& out) {
   return true;
 }
 
+// v7: добавилось «гасить экран на зарядке».
+inline bool parseV7(const uint8_t* buf, size_t len, Settings& out) {
+  if (len < kWireSize) return false;
+  const uint16_t crc_stored = (uint16_t)(buf[27] | ((uint16_t)buf[28] << 8));
+  if (crc16(buf + 4, 1 + kPayloadSize) != crc_stored) return false;
+  Settings s{};
+  s.capacity_mah = (uint16_t)(buf[5] | ((uint16_t)buf[6] << 8));
+  s.module = buf[7];
+  s.auto_off_idx = buf[8];
+  s.noise_idx = buf[9];
+  s.capacity_mode = buf[10];
+  s.brightness = buf[11];
+  s.bar_value = buf[12];
+  s.low_batt_mv100 = buf[13];
+  s.factory_crc = (uint32_t)buf[14] | ((uint32_t)buf[15] << 8) |
+                  ((uint32_t)buf[16] << 16) | ((uint32_t)buf[17] << 24);
+  s.real_cap_mah = (uint16_t)(buf[18] | ((uint16_t)buf[19] << 8));
+  s.chrg_end_epoch = (uint32_t)buf[20] | ((uint32_t)buf[21] << 8) |
+                     ((uint32_t)buf[22] << 16) | ((uint32_t)buf[23] << 24);
+  s.real_cap_low_idx = buf[24];
+  s.saw_empty = buf[25];
+  s.chg_screen_off = buf[26];
+  sanitize(s);
+  out = s;
+  return true;
+}
+
 inline bool parse(const uint8_t* buf, size_t len, Settings& out) {
   if (len < 20) return false;
   if (buf[0] != 'D' || buf[1] != 'R' || buf[2] != 'T' || buf[3] != 'C') return false;
@@ -350,7 +382,8 @@ inline bool parse(const uint8_t* buf, size_t len, Settings& out) {
     case 3: return parseV3(buf, len, out);
     case 4: return parseV4(buf, len, out);
     case 5: return parseV5(buf, len, out);
-    case kWireVersion: return parseV6(buf, len, out);
+    case 6: return parseV6(buf, len, out);
+    case kWireVersion: return parseV7(buf, len, out);
     default: return false;
   }
 }
