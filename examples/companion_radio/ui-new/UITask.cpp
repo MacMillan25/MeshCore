@@ -1126,7 +1126,7 @@ public:
       if (i == 0) return "Capacity";
       if (i == 1) return "Cap low";
       if (i == 2) return "Screen on";
-      if (i == 3) return "Chg screen";
+      if (i == 3) return "CHRG Screen";
       if (i == 4) return "Brightness";
       if (i == 5) return "Bar";
       if (i == 6) return "V-Cut";
@@ -1319,9 +1319,9 @@ public:
         static const char* on_names[DarktecPrefsFormat::kAutoOffCount] = { "15s", "30s", "1m", "5m", "1h" };
         snprintf(raw, sizeof(raw), "%s", on_names[s.auto_off_idx < DarktecPrefsFormat::kAutoOffCount ? s.auto_off_idx : 0]);
       } else if (i == 3) {
-        // Экран на зарядке: Stay — не гаснет, пока есть шнур; Off — гаснет
+        // Экран на зарядке: On — не гаснет, пока есть шнур; Off — гаснет
         // по таймауту «Screen on», как без питания.
-        snprintf(raw, sizeof(raw), "%s", s.chg_screen_off ? "Off" : "Stay");
+        snprintf(raw, sizeof(raw), "%s", s.chg_screen_off ? "Off" : "On");
       } else if (i == 4) {
         // Яркость: Low / Mid / High — словами, не цифрами.
         static const char* bri_names[DarktecPrefsFormat::kBrightnessCount] =
@@ -1553,10 +1553,9 @@ public:
         s.auto_off_idx = fwd ? (s.auto_off_idx + 1) % n
                              : (s.auto_off_idx + n - 1) % n;
       } else if (i == 3) {
-        // Экран на зарядке: Stay ⇄ Off. При Off время автоотключения больше
+        // Экран на зарядке: On ⇄ Off. При Off время автоотключения больше
         // не продлевается, пока есть шнур, — экран гаснет как обычно.
         s.chg_screen_off = s.chg_screen_off ? 0 : 1;
-        darktecNote(i, s.chg_screen_off ? "off at timeout" : "stay on");
       } else if (i == 4) {
         // Яркость: Dim (0) → Normal (128) → Bright (255). Применяется сразу:
         // это одна I2C-команда контраста, перезагрузка не нужна.
@@ -3897,7 +3896,7 @@ void UITask::loop() {
 #if AUTO_OFF_MILLIS > 0
 #if defined(KEEP_DISPLAY_ON_USB) || defined(UI_DARKTEC_SETTINGS)
     // Держим экран включённым, пока есть внешнее питание. В DarkTec это
-    // настройка меню «Chg screen»: Stay — держим (по умолчанию, как раньше),
+    // настройка меню «CHRG Screen»: On — держим (по умолчанию, как раньше),
     // Off — не держим, и экран гаснет по таймауту, как без шнура.
     // Заставку Always On это не ломает: она входит по тому же таймауту.
     bool keep_on_power = true;
