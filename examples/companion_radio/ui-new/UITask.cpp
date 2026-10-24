@@ -394,7 +394,12 @@ class HomeScreen : public UIScreen {
   uint64_t up_ms = 0;
   uint32_t up_last_ms = 0;
   uint32_t last_chrg_s = 0;   // секунды uptime на момент конца зарядки
+  uint32_t chrg_start_s = 0;  // когда началась текущая сессия заряда
   bool     was_charging = false;
+  // Короче этого сессию зарядкой не считаем: дёрнули шнур на пару секунд —
+  // время последней зарядки не переписываем и flash не трогаем. Иначе «сколько
+  // прошло с зарядки» сбивается от каждого подключения.
+  static constexpr uint32_t CHRG_MIN_SESSION_S = 600;
 
   // Свободная RAM = невыданный остаток кучи + освобождённые блоки.
   // mallinfo().fordblks один врал: он видит только освобождённые куски,
@@ -410,13 +415,20 @@ class HomeScreen : public UIScreen {
     const uint32_t now = millis();
     if (now != up_last_ms) { up_ms += (uint32_t)(now - up_last_ms); up_last_ms = now; }
     const bool ch = board.isCharging();
+    const uint32_t up_s = (uint32_t)(up_ms / 1000ULL);
+    if (ch && !was_charging) chrg_start_s = up_s;
     if (was_charging && !ch) {
-      last_chrg_s = (uint32_t)(up_ms / 1000ULL);
-      const uint32_t epoch = _rtc->getCurrentTime();
-      if (epoch > 1700000000UL) {
-        DarktecPrefs::Settings s = DarktecPrefs::get();
-        s.chrg_end_epoch = epoch;
-        DarktecPrefs::save(s);
+      // Считаем только настоящую зарядку: короткое подключение шнура не
+      // должно сбрасывать «время с последней зарядки».
+      const uint32_t dur = up_s - chrg_start_s;
+      if (dur >= CHRG_MIN_SESSION_S) {
+        last_chrg_s = up_s;
+        const uint32_t epoch = _rtc->getCurrentTime();
+        if (epoch > 1700000000UL) {
+          DarktecPrefs::Settings s = DarktecPrefs::get();
+          s.chrg_end_epoch = epoch;
+          DarktecPrefs::save(s);
+        }
       }
     }
     was_charging = ch;
