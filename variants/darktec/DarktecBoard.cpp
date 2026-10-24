@@ -486,14 +486,17 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
   }
   if (memcmp(command, "set darktec.chgscreen ", 22) == 0) {
     const char* v = &command[22];
-    if (memcmp(v, "off", 3) == 0)       s.chg_screen_off = 1;
-    else if (memcmp(v, "stay", 4) == 0) s.chg_screen_off = 0;
+    // on = экран на зарядке не гаснет, off = гаснет по таймауту.
+    // stay — старый синоним on, оставлен, чтобы не ломать скрипты.
+    if (memcmp(v, "off", 3) == 0)        s.chg_screen_off = 1;
+    else if (memcmp(v, "on", 2) == 0)    s.chg_screen_off = 0;
+    else if (memcmp(v, "stay", 4) == 0)  s.chg_screen_off = 0;
     else {
-      strcpy(reply, "Error: chgscreen stay|off");
+      strcpy(reply, "Error: chgscreen on|off");
       return true;
     }
     DarktecPrefs::save(s);
-    sprintf(reply, "OK - %s", s.chg_screen_off ? "off at timeout" : "stay on");
+    sprintf(reply, "OK - CHRG Screen %s", s.chg_screen_off ? "Off" : "On");
     return true;
   }
   if (memcmp(command, "set darktec.caplow ", 19) == 0) {
