@@ -33,11 +33,11 @@
 | `DARKTEC_BATT_PROTECT_OFF` | Нет boot-lock по химии. V-Cut из prefs и `initiateShutdown(LOW_VOLTAGE/BOOT_PROTECT)` идут в ADC-wait: нода остаётся в System ON и ждёт `V-Cut + 0.2 В`. `powerOff()` — отдельная гибернация через WFE, поднимается по RST. |
 | `DARKTEC_BATT_PROTECT_ADC` | Hard cutoff: boot-lock + AUTO_SHUTDOWN + ADC-wait. Пробуждение по `VBAT ≥ V-Cut + 0.2 В` на делителе. |
 
-LPCOMP на Darktec **не используется** (`PWRMGT_LPCOMP_*=0`): SYSTEMOFF+LPCOMP не поднимает плату от VBAT через buck-boost. SYSTEMOFF на этой плате вообще не используется: в нём гаснет внутренний DC/DC, который делает 3.3 В, и будить ноду нечем.
+LPCOMP на Darktec **не используется** (`PWRMGT_LPCOMP_*=0`): SYSTEMOFF+LPCOMP не поднимает плату от VBAT через buck-boost. SYSTEMOFF на этой плате вообще не используется: на nice!nano/ProMicro пин P0.13 (`SX126X_POWER_EN`) — это включатель 3.3 В, от которого питается и сам nRF; погасил — и обратно рейл не поднимается.
 
 ### Режим ADC — цикл (`DarktecAdcPower.h`)
 
-1. Радио/экран off (`SX126X_POWER_EN = LOW`, `shutdownPeripherals()`)
+1. Радио/экран off (`shutdownPeripherals()`); **3.3 В (P0.13) остаётся HIGH**
 2. **Отключение SoftDevice** (иначе BLE держит мА → brownout → опрос АЦП прекращается)
 3. Sleep ~1 с, замер АЦП делителя (нужны 3 стабильных чтения ≥ порога)
 4. Если `mv >= V-Cut + 0.2 В` (`DARKTEC_LOW_BATT_WAKE_MARGIN_MV`) → `NVIC_SystemReset()`
