@@ -524,24 +524,32 @@ void setup() {
 
   // A battery too flat to run is caught here, before the radio and the rest of
   // the start-up draw their peak current: otherwise a nearly empty cell browns
-  // the board out during boot and it restarts in a loop, silently. Two
-  // readings apart, so one noisy sample does not turn the node off.
-  if (power_screens::batteryFlat(board.getBattMilliVolts(), board.isExternalPowered())) {
+  // the board out during boot and restarts in a loop, silently. Two readings
+  // apart, so one noisy sample does not turn the node off.
+  const uint16_t boot_mv = board.getBattMilliVolts();
+  if (power_screens::batteryFlat(boot_mv, false)) {
     delay(200);
-    if (power_screens::batteryFlat(board.getBattMilliVolts(), board.isExternalPowered())) {
+    const uint16_t boot_mv2 = board.getBattMilliVolts();
+    if (power_screens::batteryFlat(boot_mv2, false)) {
+      // Show the flat-battery screen even when USB is plugged: USB/RESET are
+      // the user's "wake up and tell me" signal, not a silent boot.
       loadPrefsForPowerScreen();
 #ifdef DISPLAY_CLASS
       if (disp) {
-        power_screens::drawPowerOff(disp, true, board.getBattMilliVolts());
+        power_screens::drawPowerOff(disp, true, boot_mv2);
         // The low-voltage wait can last until the charger brings the pack up;
         // don't leave the panel lit for all of it.
         disp->turnOff();
       }
 #endif
+      // On USB the node can boot and run while the pack charges; on battery
+      // alone it waits for the charger in the ADC loop (never SYSTEMOFF).
+      if (!board.isExternalPowered()) {
 #if defined(NRF52_POWER_MANAGEMENT)
-      static_cast<NRF52Board&>(board).initiateShutdown(SHUTDOWN_REASON_LOW_VOLTAGE);
+        static_cast<NRF52Board&>(board).initiateShutdown(SHUTDOWN_REASON_LOW_VOLTAGE);
 #endif
-      board.powerOff();
+        board.powerOff();
+      }
     }
   }
 
