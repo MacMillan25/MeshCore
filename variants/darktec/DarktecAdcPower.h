@@ -40,12 +40,22 @@
 #define DARKTEC_ADC_WAKE_STABLE_COUNT  3
 #endif
 
+// Диагностическая сборка: не отключать внешний 3.3 В рейл и рисовать на OLED
+// живой замер АЦП. По умолчанию выключено; включается -D DARKTEC_ADC_WAIT_UI=1.
+#ifndef DARKTEC_ADC_WAIT_UI
+#define DARKTEC_ADC_WAIT_UI 0
+#endif
+
 namespace darktec {
+
+using AdcWaitDraw = void (*)(uint16_t mv, uint16_t wake_mv);
 
 /** Снизить ток перед долгим ожиданием: иначе BLE/SD → brownout и цикл АЦП умирает. */
 inline void prepareLowPowerWait(uint8_t radio_power_en_pin) {
   pinMode(radio_power_en_pin, OUTPUT);
+#if !DARKTEC_ADC_WAIT_UI
   digitalWrite(radio_power_en_pin, LOW);
+#endif
 
 #if defined(PIN_VBAT_READ)
   pinMode(PIN_VBAT_READ, INPUT);
@@ -79,7 +89,8 @@ inline uint16_t wakeThresholdMillivolts() {
  * radio_power_en_pin — RADIO_POWER_EN (выкл. на время ожидания).
  * Не возвращается: при recovery — NVIC_SystemReset().
  */
-inline void waitForBatteryRecovery(mesh::MainBoard& board, uint8_t radio_power_en_pin) {
+inline void waitForBatteryRecovery(mesh::MainBoard& board, uint8_t radio_power_en_pin,
+                                   AdcWaitDraw draw = nullptr) {
   prepareLowPowerWait(radio_power_en_pin);
 
   const uint16_t wake_mv = wakeThresholdMillivolts();
@@ -104,6 +115,7 @@ inline void waitForBatteryRecovery(mesh::MainBoard& board, uint8_t radio_power_e
 
     analogReadResolution(12);
     uint16_t mv = board.getBattMilliVolts();
+    if (draw) draw(mv, wake_mv);
 
     if (mv > 1000 && mv >= wake_mv) {
       if (++wake_hits >= DARKTEC_ADC_WAKE_STABLE_COUNT) {
