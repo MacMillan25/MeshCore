@@ -20,6 +20,7 @@
 #include <Arduino.h>
 #include <helpers/NRF52Board.h>
 #include <helpers/LowBattGuard.h>
+#include <nrf.h>
 #include <nrf_sdm.h>
 
 #include "battery_chemistry.h"
@@ -93,6 +94,14 @@ inline void waitForBatteryRecovery(mesh::MainBoard& board, uint8_t radio_power_e
 
   for (;;) {
     delay(20);
+    board.feedWatchdog();
+
+    // USB-зарядка: VBUS — отдельный жёсткий признак, не ждём напряжения пакета.
+    if (NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk) {
+      MESH_DEBUG_PRINTLN("DARKTEC: USB VBUS — reset");
+      NVIC_SystemReset();
+    }
+
     analogReadResolution(12);
     uint16_t mv = board.getBattMilliVolts();
 
