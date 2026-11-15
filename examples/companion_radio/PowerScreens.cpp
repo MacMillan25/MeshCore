@@ -17,6 +17,10 @@
 
 #include "UILang.h"
 
+#ifdef DARKTEC
+#include "DarktecAdcPower.h"
+#endif
+
 #ifndef POWER_ON_HINT
   #define POWER_ON_HINT _TR("Press RST to turn on", "Нажмите RST")
 #endif
@@ -49,7 +53,13 @@ void drawPowerOff(DisplayDriver* d, bool low_battery, uint16_t mv) {
   const int big = (d->width() >= 200) ? 2 : 1;
   const int lh  = d->getLineH(1);
   const int bh  = d->getLineH(big);
-  const int total = (low_battery ? lh + 2 : 0) + bh + 4 + lh;
+  int low_lines = low_battery ? 1 : 0;
+#ifdef DARKTEC
+  // На DarkTec под строкой напряжения печатаем порог возврата: иначе
+  // непонятно, почему нода не включается сразу над V-Cut.
+  if (low_battery) low_lines++;
+#endif
+  const int total = low_lines * (lh + 2) + bh + 4 + lh;
   int y = (d->height() - total) / 2;
   if (y < 0) y = 0;
   d->startFrame();
@@ -67,6 +77,13 @@ void drawPowerOff(DisplayDriver* d, bool low_battery, uint16_t mv) {
     }
     d->drawTextCentered(d->width() / 2, y, line);
     y += lh + 2;
+#ifdef DARKTEC
+    const uint16_t wake_mv = darktec::wakeThresholdMillivolts();
+    snprintf(line, sizeof(line), "%s %u.%02uV", _TR("Wake at", "Возврат"),
+             (unsigned)(wake_mv / 1000), (unsigned)((wake_mv % 1000) / 10));
+    d->drawTextCentered(d->width() / 2, y, line);
+    y += lh + 2;
+#endif
   }
   d->setTextSize(big);
   d->drawTextCentered(d->width() / 2, y, _TR("Turned off", "Выключен"));
