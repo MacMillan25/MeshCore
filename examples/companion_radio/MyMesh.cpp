@@ -3491,6 +3491,23 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char*
     return true;
   }
 
+  if (memcmp(command, "set ui.lang ", 12) == 0) {
+    const char* v = &command[12];
+    if (memcmp(v, "ru", 2) == 0)       _prefs.ui_lang = 1;
+    else if (memcmp(v, "en", 2) == 0)  _prefs.ui_lang = 0;
+    else {
+      strcpy(reply, "Error: ui.lang ru|en");
+      return true;
+    }
+    savePrefs();
+    strcpy(reply, _prefs.ui_lang ? "OK - RU" : "OK - EN");
+    return true;
+  }
+  if (memcmp(command, "get ui.lang", 11) == 0) {
+    sprintf(reply, "> %s", _prefs.ui_lang ? "RU" : "EN");
+    return true;
+  }
+
   if (strcmp(command, "reboot") == 0) {
     board.reboot(); // doesn't return
     return true;
