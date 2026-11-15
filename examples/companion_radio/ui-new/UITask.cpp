@@ -3693,8 +3693,12 @@ void UITask::shutdown(bool restart){
     board.setDisplayOn(false);   // after the last e-ink frame this keeps the image
     }
 #if defined(NRF52_POWER_MANAGEMENT)
-    // Arms the wake on USB power / a recovered battery (configureVoltageWake).
-    if (_low_battery_off) static_cast<NRF52Board&>(board).initiateShutdown(SHUTDOWN_REASON_LOW_VOLTAGE);
+    // Low battery: put radio/GPS to sleep first. The ADC wait stays in System
+    // ON and must not keep the receiver running for hours.
+    if (_low_battery_off) {
+      static_cast<NRF52Board&>(board).shutdownPeripherals();
+      static_cast<NRF52Board&>(board).initiateShutdown(SHUTDOWN_REASON_LOW_VOLTAGE);
+    }
 #endif
     // Power off board including radio, display, GPS and components
     _board->powerOff();

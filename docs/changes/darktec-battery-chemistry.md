@@ -30,24 +30,24 @@
 
 | Режим | Поведение |
 |-------|-----------|
-| `DARKTEC_BATT_PROTECT_OFF` | Нет boot-lock / companion auto-shutdown. Химия только для % на UI. `powerOff()` всё равно ADC-wait по VBAT (SYSTEMOFF на этой плате не встаёт от пакета через buck-boost). |
-| `DARKTEC_BATT_PROTECT_ADC` | Hard cutoff: boot-lock + AUTO_SHUTDOWN + ADC sleep/wake. Пробуждение только по `VBAT ≥ wake` на делителе. |
+| `DARKTEC_BATT_PROTECT_OFF` | Нет boot-lock по химии. V-Cut из prefs и `initiateShutdown(LOW_VOLTAGE/BOOT_PROTECT)` идут в ADC-wait: нода остаётся в System ON и ждёт `V-Cut + 0.2 В`. `powerOff()` — отдельная гибернация через WFE, поднимается по RST. |
+| `DARKTEC_BATT_PROTECT_ADC` | Hard cutoff: boot-lock + AUTO_SHUTDOWN + ADC-wait. Пробуждение по `VBAT ≥ V-Cut + 0.2 В` на делителе. |
 
-LPCOMP на Darktec **не используется** (`PWRMGT_LPCOMP_*=0`): SYSTEMOFF+LPCOMP не поднимает плату от VBAT через buck-boost.
+LPCOMP на Darktec **не используется** (`PWRMGT_LPCOMP_*=0`): SYSTEMOFF+LPCOMP не поднимает плату от VBAT через buck-boost. SYSTEMOFF на этой плате вообще не используется: в нём гаснет внутренний DC/DC, который делает 3.3 В, и будить ноду нечем.
 
 ### Режим ADC — цикл (`DarktecAdcPower.h`)
 
-1. Радио off (`SX126X_POWER_EN = LOW`)
+1. Радио/экран off (`SX126X_POWER_EN = LOW`, `shutdownPeripherals()`)
 2. **Отключение SoftDevice** (иначе BLE держит мА → brownout → опрос АЦП прекращается)
-3. Sleep ~1 с, замер АЦП делителя (нужны 3 стабильных чтения ≥ wake)
-4. Если `mv >= PWRMGT_VOLTAGE_WAKE` → `NVIC_SystemReset()`
+3. Sleep ~1 с, замер АЦП делителя (нужны 3 стабильных чтения ≥ порога)
+4. Если `mv >= V-Cut + 0.2 В` (`DARKTEC_LOW_BATT_WAKE_MARGIN_MV`) → `NVIC_SystemReset()`
 5. Иначе снова sleep
 
 Срабатывает при:
 
 - boot, если `mv < PWRMGT_VOLTAGE_BOOTLOCK` (`DARKTEC_BATT_PROTECT_ADC`)
-- `initiateShutdown(LOW_VOLTAGE|BOOT_PROTECT)` (`ADC`)
-- `powerOff()` (оба режима; в т.ч. companion `AUTO_SHUTDOWN_MILLIVOLTS` при `ADC`)
+- `initiateShutdown(LOW_VOLTAGE|BOOT_PROTECT)` (оба режима)
+- `powerOff()` — это отдельная гибернация через WFE, не ADC-wait
 
 ## Химия батареи
 
@@ -57,14 +57,17 @@ LPCOMP на Darktec **не используется** (`PWRMGT_LPCOMP_*=0`): SYS
 -D TELEM_INA3221_SHUNT_VALUE=0.050
 ```
 
-| Химия | empty/critical | bootlock | wake | UI full |
-|-------|----------------|----------|------|---------|
-| Li-ion 1S | 3000 | 3200 | 3600 | 4200 |
-| LiFePO4 1S | 2500 | 2700 | 3100 | 3650 |
-| LTO 1S | 1800 | 2000 | 2200 | 2500 |
-| LTO 2S | ×2 | ×2 | ×2 | ×2 |
+| Химия | empty/critical | bootlock | wake (ADC: V-Cut + 0.2) | UI full |
+|-------|----------------|----------|-------------------------|---------|
+| Li-ion 1S | 3000 | 3200 | 3200 | 4200 |
+| LiFePO4 1S | 2500 | 2700 | 2700 | 3650 |
+| LTO 1S | 1800 | 2000 | 2000 | 2500 |
+| LTO 2S | ×2 | ×2 | 3800 | ×2 |
 
-Пороги bootlock/wake/critical применяются только при `DARKTEC_BATT_PROTECT_ADC`.
+`wake` — для ADC-режима, где штатный V-Cut равен `critical`. В OFF-сборке
+штатный V-Cut 3400 мВ, поэтому возврат 3600 мВ; если в prefs задан свой
+V-Cut, возврат всегда `V-Cut + 200 мВ` (`DARKTEC_LOW_BATT_WAKE_MARGIN_MV`).
+Пороги bootlock/critical применяются только при `DARKTEC_BATT_PROTECT_ADC`.
 `BATT_MIN/MAX` (шкала %) — всегда.
 
 ## Радио по умолчанию
