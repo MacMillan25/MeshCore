@@ -202,6 +202,20 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store);
 
 /* END GLOBAL OBJECTS */
 
+// The flat-battery screen is drawn before the_mesh.begin() loads /prefs.json,
+// so _TR() would fall back to EN. Mount the primary FS and load the saved prefs
+// first — only when that screen is actually needed.
+static void loadPrefsForPowerScreen() {
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  InternalFS.begin();
+#elif defined(RP2040_PLATFORM)
+  LittleFS.begin();
+#elif defined(ESP32)
+  SPIFFS.begin(true);
+#endif
+  store.loadPrefs(*the_mesh.getNodePrefs());
+}
+
 void halt() {
   while (1) ;
 }
@@ -515,6 +529,7 @@ void setup() {
   if (power_screens::batteryFlat(board.getBattMilliVolts(), board.isExternalPowered())) {
     delay(200);
     if (power_screens::batteryFlat(board.getBattMilliVolts(), board.isExternalPowered())) {
+      loadPrefsForPowerScreen();
 #ifdef DISPLAY_CLASS
       if (disp) {
         power_screens::drawPowerOff(disp, true, board.getBattMilliVolts());
