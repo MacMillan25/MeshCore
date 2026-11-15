@@ -1,26 +1,29 @@
 #pragma once
 
 /*
- * Darktec: hard cutoff / recovery по АЦП (режим DARKTEC_BATT_PROTECT_ADC).
+ * Darktec: hard cutoff / recovery по АЦП.
  *
  * Питание MCU: батарея → внешний DC-DC buck-boost → 3V3.
  * АЦП: тот же пакет через делитель (D17 / AIN7) — единственный критерий wake.
  * USB VBUS MCU к питанию/зарядке/recovery не относится.
  *
- * SYSTEMOFF + LPCOMP здесь не подходит: остаёмся в System ON, гасим
- * SoftDevice/радио (иначе BLE → brownout → MCU обесточен и опрос мёртв),
- * периодически читаем делитель.
+ * SYSTEMOFF + LPCOMP здесь не подходит: в SYSTEMOFF nRF гасит свой DC/DC,
+ * который делает 3.3 В, и будить ноду нечем. Поэтому остаёмся в System ON,
+ * гасим SoftDevice/радио, периодически читаем делитель.
  *
- * Цикл: радио OFF → disable SoftDevice → sleep → АЦП ≥ wake → reset.
+ * Порог возврата — V-Cut + DARKTEC_LOW_BATT_WAKE_MARGIN_MV (0.2 В): если в
+ * prefs V-Cut не задан, берётся штатный DARKTEC_DEFAULT_LOW_BATT_MV.
+ *
+ * Цикл: радио OFF → disable SoftDevice → sleep → АЦП ≥ V-Cut + 0.2 В → reset.
  */
 
 #include <Arduino.h>
 #include <helpers/NRF52Board.h>
+#include <helpers/LowBattGuard.h>
 #include <nrf_sdm.h>
 
-#ifndef PWRMGT_VOLTAGE_WAKE
-#define PWRMGT_VOLTAGE_WAKE 3600
-#endif
+#include "battery_chemistry.h"
+
 #ifndef PWRMGT_VOLTAGE_BOOTLOCK
 #define PWRMGT_VOLTAGE_BOOTLOCK 3200
 #endif
@@ -59,6 +62,17 @@ inline void prepareLowPowerWait(uint8_t radio_power_en_pin) {
   }
 }
 
+/** V-Cut, который действует сейчас: из prefs, иначе штатный. */
+inline uint16_t cutoffMillivolts() {
+  return LowBattGuard::overridden() ? LowBattGuard::millivolts()
+                                    : (uint16_t)DARKTEC_DEFAULT_LOW_BATT_MV;
+}
+
+/** Порог возврата: V-Cut + 0.2 В. */
+inline uint16_t wakeThresholdMillivolts() {
+  return cutoffMillivolts() + DARKTEC_LOW_BATT_WAKE_MARGIN_MV;
+}
+
 /**
  * Блокирующий цикл ожидания восстановления пакета по АЦП.
  * radio_power_en_pin — RADIO_POWER_EN (выкл. на время ожидания).
@@ -67,10 +81,13 @@ inline void prepareLowPowerWait(uint8_t radio_power_en_pin) {
 inline void waitForBatteryRecovery(mesh::MainBoard& board, uint8_t radio_power_en_pin) {
   prepareLowPowerWait(radio_power_en_pin);
 
-  MESH_DEBUG_PRINTLN("DARKTEC: ADC power wait (bootlock=%u critical=%u wake=%u)",
+  const uint16_t wake_mv = wakeThresholdMillivolts();
+
+  MESH_DEBUG_PRINTLN("DARKTEC: ADC power wait (bootlock=%u critical=%u cutoff=%u wake=%u)",
       (unsigned)PWRMGT_VOLTAGE_BOOTLOCK,
       (unsigned)PWRMGT_VOLTAGE_CRITICAL,
-      (unsigned)PWRMGT_VOLTAGE_WAKE);
+      (unsigned)cutoffMillivolts(),
+      (unsigned)wake_mv);
 
   uint8_t wake_hits = 0;
 
@@ -79,9 +96,10 @@ inline void waitForBatteryRecovery(mesh::MainBoard& board, uint8_t radio_power_e
     analogReadResolution(12);
     uint16_t mv = board.getBattMilliVolts();
 
-    if (mv > 1000 && mv >= (uint16_t)PWRMGT_VOLTAGE_WAKE) {
+    if (mv > 1000 && mv >= wake_mv) {
       if (++wake_hits >= DARKTEC_ADC_WAKE_STABLE_COUNT) {
-        MESH_DEBUG_PRINTLN("DARKTEC: VBAT %u mV >= wake — reset", (unsigned)mv);
+        MESH_DEBUG_PRINTLN("DARKTEC: VBAT %u mV >= wake %u — reset",
+            (unsigned)mv, (unsigned)wake_mv);
         NVIC_SystemReset();
       }
     } else {

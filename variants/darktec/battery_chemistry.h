@@ -120,6 +120,9 @@
 #define BATT_MAX_MILLIVOLTS  BATT_PACK_FULL_MV
 #endif
 
+// PWRMGT_VOLTAGE_WAKE оставлен как справочная величина (старый фиксированный
+// порог). Рабочий порог возврата считается от V-Cut: +200 мВ, см.
+// DARKTEC_LOW_BATT_WAKE_MARGIN_MV ниже и darktec::wakeThresholdMillivolts().
 #if DARKTEC_BATT_PROTECT == DARKTEC_BATT_PROTECT_ADC
 
 #ifndef PWRMGT_VOLTAGE_BOOTLOCK
@@ -148,6 +151,23 @@
 #endif
 /* AUTO_SHUTDOWN_MILLIVOLTS не задаём — companion не уходит в auto powerOff */
 
+#endif
+
+// Порог возврата после V-Cut: сам V-Cut + этот запас. Так нода не
+// выключается-включается на границе, а ждёт, пока пакет реально поднимется.
+#ifndef DARKTEC_LOW_BATT_WAKE_MARGIN_MV
+#define DARKTEC_LOW_BATT_WAKE_MARGIN_MV  200
+#endif
+
+// Штатный V-Cut, если в prefs значение не задано (low_batt_mv100 = 0).
+// Должен совпадать с тем, что реально применяет power_screens::batteryFlat():
+// в ADC-режиме это AUTO_SHUTDOWN_MILLIVOLTS, в OFF — дефолт PowerScreens.cpp.
+#ifndef DARKTEC_DEFAULT_LOW_BATT_MV
+  #ifdef AUTO_SHUTDOWN_MILLIVOLTS
+    #define DARKTEC_DEFAULT_LOW_BATT_MV  AUTO_SHUTDOWN_MILLIVOLTS
+  #else
+    #define DARKTEC_DEFAULT_LOW_BATT_MV  3400
+  #endif
 #endif
 
 /* LPCOMP на Darktec не используем (brick при recovery с boost). */

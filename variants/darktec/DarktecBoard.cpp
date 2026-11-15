@@ -43,13 +43,16 @@ const PowerMgtConfig power_config = {
 };
 
 void DarktecBoard::initiateShutdown(uint8_t reason) {
-#if DARKTEC_BATT_PROTECT == DARKTEC_BATT_PROTECT_ADC
+  // На этой плате SYSTEMOFF — односторонняя дверь: nRF в high-voltage mode
+  // гасит свой DC/DC, который делает 3.3 В, а зарядник висит на стороне
+  // пакета (USB VBUS не появляется). Поэтому низковольтный уход — только
+  // ожидание восстановления по АЦП: ядро живо, радио/экран погашены, раз в
+  // секунду читаем пакет и при V-Cut + 0.2 В делаем reset.
   if (reason == SHUTDOWN_REASON_LOW_VOLTAGE ||
       reason == SHUTDOWN_REASON_BOOT_PROTECT) {
     darktec::waitForBatteryRecovery(*this, RADIO_POWER_EN);
     return;  // недостижимо
   }
-#endif
 
   digitalWrite(RADIO_POWER_EN, LOW);
   enterSystemOff(reason);

@@ -516,7 +516,12 @@ void setup() {
     delay(200);
     if (power_screens::batteryFlat(board.getBattMilliVolts(), board.isExternalPowered())) {
 #ifdef DISPLAY_CLASS
-      if (disp) power_screens::drawPowerOff(disp, true, board.getBattMilliVolts());
+      if (disp) {
+        power_screens::drawPowerOff(disp, true, board.getBattMilliVolts());
+        // The low-voltage wait can last until the charger brings the pack up;
+        // don't leave the panel lit for all of it.
+        disp->turnOff();
+      }
 #endif
 #if defined(NRF52_POWER_MANAGEMENT)
       static_cast<NRF52Board&>(board).initiateShutdown(SHUTDOWN_REASON_LOW_VOLTAGE);
