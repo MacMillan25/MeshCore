@@ -9,6 +9,35 @@
 #include <helpers/NodePrefs.h>
 #include <helpers/LowBattGuard.h>
 
+#if DARKTEC_ADC_WAIT_UI
+#include "target.h"
+#endif
+
+// Диагностика ADC-ожидания: живой замер на OLED. Только для сборки с
+// DARKTEC_ADC_WAIT_UI=1 — обычные прошивки этот код не тянут.
+#if DARKTEC_ADC_WAIT_UI
+static uint32_t s_adc_wait_ticks = 0;
+static void adcWaitDraw(uint16_t mv, uint16_t wake_mv) {
+  s_adc_wait_ticks++;
+  display.setContrast(255);
+  display.turnOn();
+  display.startFrame();
+  display.setColor(UIColor::primary_txt);
+  display.setTextSize(1);
+  char line[40];
+  snprintf(line, sizeof(line), "V %u.%02u  W %u.%02u",
+           (unsigned)(mv / 1000), (unsigned)((mv % 1000) / 10),
+           (unsigned)(wake_mv / 1000), (unsigned)((wake_mv % 1000) / 10));
+  display.drawTextCentered(display.width() / 2, 20, line);
+  snprintf(line, sizeof(line), "tick %lu", (unsigned long)s_adc_wait_ticks);
+  display.drawTextCentered(display.width() / 2, 36, line);
+  display.endFrame();
+}
+#define DARKTEC_ADC_WAIT_DRAW adcWaitDraw
+#else
+#define DARKTEC_ADC_WAIT_DRAW nullptr
+#endif
+
 // Фасад для BatteryPack: позволяет ядровому оверлею получить SOC нашей модели,
 // не таща за собой объект платы (роль платы в main() отличается по примерам).
 static DarktecBoard* g_power_board = nullptr;
@@ -49,7 +78,7 @@ void DarktecBoard::initiateShutdown(uint8_t reason) {
   // секунду читаем пакет и при V-Cut + 0.2 В делаем reset.
   if (reason == SHUTDOWN_REASON_LOW_VOLTAGE ||
       reason == SHUTDOWN_REASON_BOOT_PROTECT) {
-    darktec::waitForBatteryRecovery(*this, SX126X_POWER_EN);
+    darktec::waitForBatteryRecovery(*this, SX126X_POWER_EN, DARKTEC_ADC_WAIT_DRAW);
     return;  // недостижимо
   }
 
