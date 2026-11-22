@@ -11,7 +11,7 @@ const Blob g_factory_cfg = {
     { 'D', 'A', 'R', 'K', 'T', 'E', 'C', '-', 'F', 'A', 'C', 'T', 'O', 'R', 'Y', 0x01 },
     kVersion,
     0,                 // длина полезной части: 0 = блок пустой
-    { 0, 0 },
+    { kCapVcut, kCapsVersion },   // возможности заготовки (см. DarktecFactoryCfg.h)
     0,                 // CRC32
     { 0 }              // payload
 };

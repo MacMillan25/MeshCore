@@ -133,6 +133,14 @@ bool DarktecBoard::applyFactoryConfig(NodePrefs& prefs) {
     changed = true;
   }
 
+  if (p.flags & DarktecFactoryCfg::FLAG_LOW_BATT) {
+    // V-cut: порог отключения по низкому напряжению. 0 — штатные 3.40 В,
+    // больше 4.0 В — мусор в блоке, такое не применяем.
+    s.low_batt_mv100 = (p.low_batt_mv100 <= 40) ? p.low_batt_mv100 : 0;
+    LowBattGuard::set((uint16_t)s.low_batt_mv100 * 100);
+    changed = true;
+  }
+
   // CRC записываем всегда, даже если флаги ничего не поменяли: иначе блок
   // будет применяться на каждом старте.
   s.factory_crc = blob->crc32;
@@ -268,13 +276,30 @@ void DarktecBoard::begin() {
                 (unsigned)NRF_POWER->RESETREAS, (unsigned)NRF_POWER->GPREGRET2);
 
   // Блок заводских настроек: обращение к нему держит секцию в образе
-    // (иначе --gc-sections её выбрасывает). Чтение появится отдельным шагом.
-    (void)DarktecFactoryCfg::blob();
+    // (иначе --gc-sections её выбрасывает). Сам блок применяется в main()
+    // позже — уже после проверки батареи, — поэтому V-cut из него берём
+    // отсюда.
     const DarktecPrefsFormat::Settings& p = DarktecPrefs::get();
+    uint8_t low_batt_mv100 = p.low_batt_mv100;
+#ifdef DARKTEC_FACTORY_CFG
+    const DarktecFactoryCfg::Blob* blob = DarktecFactoryCfg::blob();
+    DarktecFactoryCfg::Payload fp;
+    if (p.factory_crc != blob->crc32 &&
+        DarktecFactoryCfg::isValid(blob, fp) &&
+        (fp.flags & DarktecFactoryCfg::FLAG_LOW_BATT)) {
+      // 0 — штатные 3.40 В, больше 4.0 В — мусор в блоке.
+      low_batt_mv100 = (fp.low_batt_mv100 <= 40) ? fp.low_batt_mv100 : 0;
+    }
+#else
+    // У роли нет блока заводских настроек (kiss_modem, terminal_chat) — его
+    // и в образе быть не должно, иначе прошивальщик решит, что вшивать можно.
+    (void)DarktecFactoryCfg::blob();
+#endif
     // Порог отключения по низкому напряжению применяем сразу: проверка батареи
-    // в main() идёт уже после board.begin(), поэтому стендовое значение из
-    // prefs успевает подхватиться и переживает перезагрузку.
-    LowBattGuard::set((uint16_t)p.low_batt_mv100 * 100);
+    // в main() идёт уже после board.begin(), поэтому значение из prefs (или из
+    // ещё не применённого заводского блока) успевает подхватиться и переживает
+    // перезагрузку.
+    LowBattGuard::set((uint16_t)low_batt_mv100 * 100);
     // Ёмкость — с учётом режима UserPref/3000/4000/RealCap: от неё масштабируются
     // остаток и ETA в модели.
     _pm.setCapacityMah((float)DarktecPrefsFormat::effectiveCapacityMah(p));
