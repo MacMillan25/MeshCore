@@ -497,11 +497,13 @@ bool DarktecBoard::handleCommand(const char* command, uint32_t sender_timestamp,
     sprintf(reply, "> %d", (int)DarktecPrefs::get().module);
     return true;
   }
-  // Порог отключения по низкому напряжению — только на текущую сессию, в файл
-  // не пишется: после перезагрузки защита снова штатная (3.40 В). Нужно для
-  // стенда, где нода питается от ЛБП ниже этого уровня.
-  if (memcmp(command, "set darktec.lowbat ", 20) == 0) {
-    const char* v = &command[20];
+  // Порог отключения по низкому напряжению: пишется в prefs, поэтому
+  // переживает перезагрузку; off/default возвращают штатные 3.40 В.
+  // Длина префикса — sizeof-1: раньше здесь стояло 20 вместо 19, и команда
+  // не срабатывала вообще (проверялся ещё и завершающий ноль литерала).
+  static const char kLowBatPrefix[] = "set darktec.lowbat ";
+  if (memcmp(command, kLowBatPrefix, sizeof(kLowBatPrefix) - 1) == 0) {
+    const char* v = command + (sizeof(kLowBatPrefix) - 1);
     if (memcmp(v, "off", 3) == 0 || memcmp(v, "default", 7) == 0) {
       s.low_batt_mv100 = 0;
       DarktecPrefs::save(s);
